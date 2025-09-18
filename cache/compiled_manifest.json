@@ -1,0 +1,4 @@
+{
+  "pages/home.blade.tpl": "pages_home.blade.tpl.compiled",
+  "pages/home.gohtml": "pages_home.gohtml.compiled"
+}

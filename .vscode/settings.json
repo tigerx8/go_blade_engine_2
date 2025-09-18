@@ -1,0 +1,11 @@
+{
+  "files.associations": {
+    "*.gohtml": "jinja-html"
+  },
+  "[html]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "editor.formatOnSave": true,
+  "prettier.singleQuote": true,
+  "prettier.printWidth": 120
+}

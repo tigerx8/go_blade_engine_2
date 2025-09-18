@@ -54,7 +54,7 @@ func NewBladeEngineWithConfig(config BladeConfig) *BladeEngine {
 	// When in blade mode we keep compiler file IO on disk (compiler uses os.ReadFile)
 	compiler := NewCompilerWithOptions(config.TemplatesDir, m, fsForCompiler)
 
-	return &BladeEngine{
+	be := &BladeEngine{
 		templatesDir:      config.TemplatesDir,
 		templateExtension: config.TemplateExtension,
 		cacheManager:      cacheManager,
@@ -64,6 +64,21 @@ func NewBladeEngineWithConfig(config BladeConfig) *BladeEngine {
 		mode:              m,
 		fs:                config.EmbeddedFS,
 	}
+
+	// If using native Go mode, remove any legacy compiled cache files for .gohtml
+	if be.mode == "go" && be.cacheManager != nil {
+		_ = be.cacheManager.CleanupCompiledForExtension(".gohtml")
+	}
+
+	// // Always remove legacy compiled files for blade templates (e.g., .blade.tpl)
+	// if be.cacheManager != nil {
+	// 	_ = be.cacheManager.CleanupCompiledForExtension(".blade.tpl")
+	// 	// Also remove compiled files that look like they came from layouts/ or components/
+	// 	_ = be.cacheManager.CleanupLegacyCompiledForDirs([]string{"layouts", "components"})
+	// }
+
+	return be
+
 }
 
 // NewBladeEngine tạo Blade Engine với cấu hình mặc định
@@ -116,6 +131,7 @@ func (b *BladeEngine) renderWithCache(w io.Writer, templateName string, data int
 // renderWithoutCache render template không sử dụng cache
 func (b *BladeEngine) renderWithoutCache(w io.Writer, templateName string, data interface{}) error {
 	templatePath := filepath.Join(b.templatesDir, templateName)
+	fmt.Println("templatePath", templatePath)
 	tmpl, err := b.compiler.ParseTemplate(templatePath)
 	if err != nil {
 		return err

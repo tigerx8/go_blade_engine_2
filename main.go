@@ -41,12 +41,12 @@ func main() {
 	config := engine.BladeConfig{
 		TemplatesDir:      "./templates",
 		CacheEnabled:      true,
-		Development:       true,      // Set true để development mode (auto reload)
-		CacheMaxSizeMB:    50,        // 50MB cache
-		CacheTTLMinutes:   30,        // 30 minutes
-		TemplateExtension: ".gohtml", // dùng ".blade.tpl" nếu là Blade
-		Mode:              "go",      // "blade" hoặc "go". Set to "go" to use EmbeddedFS with native Go templates.
-		EmbeddedFS:        subFS,     // Provided for go mode; ignored in blade mode
+		Development:       true,    // Set true để development mode (auto reload)
+		CacheMaxSizeMB:    50,      // 50MB cache
+		CacheTTLMinutes:   30,      // 30 minutes
+		TemplateExtension: ".tpl",  // dùng ".tpl" nếu là Blade
+		Mode:              "blade", // "blade" hoặc "go". Set to "go" to use EmbeddedFS with native Go templates.
+		EmbeddedFS:        subFS,   // Provided for go mode; ignored in blade mode
 	}
 
 	blade := engine.NewBladeEngineWithConfig(config)
@@ -63,7 +63,7 @@ func main() {
 	}
 
 	// // Debug template cụ thể nếu cần
-	// blade.DebugTemplate("pages/home.html")
+	// blade.DebugTemplate("pages/home.gohtml")
 
 	// Trong development mode, start file watcher
 	if config.Development {
@@ -76,27 +76,6 @@ func main() {
 		}
 	}
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-
-		data := map[string]interface{}{
-			"user": User{Name: "John Doe", IsAdmin: true},
-			"items": []Item{
-				{HTMLContent: "<strong>Item 1</strong>"},
-				{HTMLContent: "<em>Item 2</em>"},
-			},
-		}
-
-		err := blade.Render(w, "pages/home.gohtml", data)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Log performance
-		duration := time.Since(start)
-		log.Printf("Rendered template in %v", duration)
-	})
 	http.HandleFunc("/blade", func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
@@ -106,6 +85,28 @@ func main() {
 				{Name: "Item 1", Price: "$10", HTMLContent: "<strong>Item 1</strong>"},
 				{Name: "Item 2", Price: "$20", HTMLContent: "<strong>Item 2</strong>"},
 				{Name: "Item 3", Price: "$30", HTMLContent: "<strong>Item 3</strong>"},
+			},
+		}
+
+		err := blade.Render(w, "pages/home.blade.tpl", data)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Log performance
+		duration := time.Since(start)
+		log.Printf("Rendered template in %v", duration)
+	})
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		data := map[string]interface{}{
+			"user": User{Name: "John Doe", IsAdmin: true},
+			"items": []Item{
+				{HTMLContent: "<strong>Item 1</strong>"},
+				{HTMLContent: "<em>Item 2</em>"},
 			},
 		}
 

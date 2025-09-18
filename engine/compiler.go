@@ -1,12 +1,15 @@
 package engine
 
 import (
+	"encoding/json"
 	"fmt"
 	"html/template"
 	fsys "io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -16,6 +19,8 @@ type Compiler struct {
 	cacheDir     string
 	mode         string  // "blade" or "go"
 	fs           fsys.FS // optional embedded FS, used when mode == "go"
+	manifestPath string
+	manifest     map[string]string // templatePath -> compiledFilename
 }
 
 func NewCompiler(templatesDir string) *Compiler {
@@ -30,11 +35,13 @@ func NewCompilerWithMode(templatesDir, mode string) *Compiler {
 // NewCompilerWithOptions allows providing an embedded FS for go mode
 func NewCompilerWithOptions(templatesDir, mode string, fs fsys.FS) *Compiler {
 	cacheDir := filepath.Join(filepath.Dir(templatesDir), "cache")
-	return &Compiler{
+	manifestPath := filepath.Join(cacheDir, "compiled_manifest.json")
+	c := &Compiler{
 		templatesDir: templatesDir,
 		cacheDir:     cacheDir,
 		mode:         mode,
 		fs:           fs,
+		manifestPath: manifestPath,
 		funcMap: template.FuncMap{
 			"escape": func(s string) template.HTML {
 				return template.HTML(template.HTMLEscapeString(s))
@@ -49,8 +56,70 @@ func NewCompilerWithOptions(templatesDir, mode string, fs fsys.FS) *Compiler {
 				}
 				return false
 			},
+			// join: helper for tests that join []string with a separator
+			"join": func(sep string, items []string) string {
+				return strings.Join(items, sep)
+			},
 		},
 	}
+
+	// ensure cache dir exists
+	_ = os.MkdirAll(cacheDir, 0755)
+	// ensure manifest file exists (create empty JSON if not)
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		_ = os.WriteFile(manifestPath, []byte("{}"), 0644)
+	}
+	// load manifest
+	if err := c.loadManifest(); err != nil {
+		log.Printf("warning: could not load compiled manifest: %v", err)
+	}
+
+	return c
+}
+
+// manifest helpers
+func (c *Compiler) loadManifest() error {
+	c.manifest = make(map[string]string)
+	data, err := os.ReadFile(c.manifestPath)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, &c.manifest)
+}
+
+func (c *Compiler) saveManifest() error {
+	data, err := json.MarshalIndent(c.manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(c.manifestPath, data, 0644); err != nil {
+		return err
+	}
+	return nil
+}
+
+// registerCompiled records that templatePath should have compiled file compiledName
+func (c *Compiler) registerCompiled(templatePath, compiledName string) error {
+	if c.manifest == nil {
+		c.manifest = make(map[string]string)
+	}
+	c.manifest[templatePath] = compiledName
+	if err := c.saveManifest(); err != nil {
+		log.Printf("warning: could not save compiled manifest: %v", err)
+		return nil
+	}
+	return nil
+}
+
+// manifestFilenameForTemplate returns compiled filename stored in manifest or default derived name
+func (c *Compiler) manifestFilenameForTemplate(templatePath string) string {
+	if c.manifest == nil {
+		return strings.ReplaceAll(templatePath, string(os.PathSeparator), "_") + ".compiled"
+	}
+	if name, ok := c.manifest[templatePath]; ok {
+		return name
+	}
+	return strings.ReplaceAll(templatePath, string(os.PathSeparator), "_") + ".compiled"
 }
 
 // Compile biên dịch template từ Blade syntax sang Go template syntax
@@ -78,7 +147,10 @@ func (c *Compiler) Compile(templatePath string) (string, error) {
 	// For blade mode, we may or may not write compiled cache files.
 	// Layouts and components are typically included into pages and don't need standalone compiled cache files.
 	relPath, _ := filepath.Rel(c.templatesDir, templatePath)
-	cacheFile := filepath.Join(c.cacheDir, strings.ReplaceAll(relPath, string(os.PathSeparator), "_")+".compiled")
+	relPath = filepath.ToSlash(relPath)
+	// Determine compiled filename using manifest (relative path used as key)
+	compiledName := c.manifestFilenameForTemplate(relPath)
+	cacheFile := filepath.Join(c.cacheDir, compiledName)
 
 	// If we should read from cache for this template, and cache is fresh, return it
 	if c.shouldWriteCompiled(templatePath) {
@@ -104,7 +176,10 @@ func (c *Compiler) Compile(templatePath string) (string, error) {
 
 	// Write compiled cache only for templates that need it
 	if c.shouldWriteCompiled(templatePath) {
-		_ = os.WriteFile(cacheFile, []byte(compiled), 0644)
+		if err := os.WriteFile(cacheFile, []byte(compiled), 0644); err == nil {
+			// record mapping in manifest (use relative path key)
+			_ = c.registerCompiled(relPath, compiledName)
+		}
 	}
 
 	return compiled, nil
@@ -219,8 +294,8 @@ func (c *Compiler) processSections(content, templatePath string) (string, error)
 	re = regexp.MustCompile(`@section\s*\(\s*['"]([^'"]+)['"]\s*\)\s*`)
 	content = re.ReplaceAllString(content, "{{define \"$1\"}}")
 
-	// Đảm bảo tất cả sections đều có end
-	if strings.Count(content, "{{define") != strings.Count(content, "{{end}}") {
+	// Ensure no leftover @section/@endsection markers (we matched pairs above).
+	if strings.Contains(content, "@section") || strings.Contains(content, "@endsection") {
 		return "", fmt.Errorf("unclosed section in template %s", templatePath)
 	}
 
@@ -432,24 +507,267 @@ func (c *Compiler) processUnless(content, templatePath string) (string, error) {
 
 // processVariables xử lý {{ }}
 func (c *Compiler) processVariables(content, templatePath string) (string, error) {
-	// Xử lý các biến thông thường {{ $var }} và chuyển $var -> .var
-	re := regexp.MustCompile(`{{\s*(.*?)\s*}}`)
+	// Token-based detector: returns true if expression is a simple $-variable expression
+	// like "$name" or "$user.Name" or "$m["key"]" and contains no pipes, operators,
+	// parentheses, or function calls. Uses a small tokenizer for robustness.
+	re := regexp.MustCompile(`{{-?\s*(.*?)\s*-?}}`)
+
+	type tokType int
+	const (
+		tokEOF tokType = iota
+		tokIdent
+		tokDollarIdent
+		tokDot
+		tokLBracket
+		tokRBracket
+		tokString
+		tokNumber
+		tokPipe
+		tokLParen
+		tokRParen
+		tokOp
+		tokComma
+		tokOther
+	)
+
+	type token struct {
+		typ tokType
+		val string
+	}
+
+	tokenize := func(expr string) ([]token, error) {
+		var toks []token
+		i := 0
+		n := len(expr)
+		for i < n {
+			ch := expr[i]
+			// whitespace
+			if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
+				i++
+				continue
+			}
+			switch ch {
+			case '|':
+				toks = append(toks, token{tokPipe, "|"})
+				i++
+			case '(':
+				toks = append(toks, token{tokLParen, "("})
+				i++
+			case ')':
+				toks = append(toks, token{tokRParen, ")"})
+				i++
+			case '.':
+				toks = append(toks, token{tokDot, "."})
+				i++
+			case '[':
+				toks = append(toks, token{tokLBracket, "["})
+				i++
+			case ']':
+				toks = append(toks, token{tokRBracket, "]"})
+				i++
+			case ',':
+				toks = append(toks, token{tokComma, ","})
+				i++
+			case '$':
+				// dollar identifier
+				j := i + 1
+				if j < n && isAlpha(expr[j]) {
+					k := j + 1
+					for k < n && (isAlphaNum(expr[k]) || expr[k] == '_') {
+						k++
+					}
+					toks = append(toks, token{tokDollarIdent, expr[j:k]})
+					i = k
+				} else {
+					toks = append(toks, token{tokOther, string(ch)})
+					i++
+				}
+			case '"', '\'':
+				quote := ch
+				j := i + 1
+				var sb strings.Builder
+				for j < n {
+					if expr[j] == '\\' && j+1 < n {
+						sb.WriteByte(expr[j])
+						sb.WriteByte(expr[j+1])
+						j += 2
+						continue
+					}
+					if expr[j] == quote {
+						j++
+						break
+					}
+					sb.WriteByte(expr[j])
+					j++
+				}
+				toks = append(toks, token{tokString, sb.String()})
+				i = j
+			default:
+				if isDigit(ch) {
+					j := i
+					for j < n && (isDigit(expr[j]) || expr[j] == '.') {
+						j++
+					}
+					toks = append(toks, token{tokNumber, expr[i:j]})
+					i = j
+					continue
+				}
+				if isAlpha(ch) {
+					j := i
+					for j < n && (isAlphaNum(expr[j]) || expr[j] == '_' || expr[j] == '.') {
+						j++
+					}
+					toks = append(toks, token{tokIdent, expr[i:j]})
+					i = j
+					continue
+				}
+				// operators and others
+				if strings.ContainsAny(string(ch), "+-*/%&><=") {
+					toks = append(toks, token{tokOp, string(ch)})
+					i++
+					continue
+				}
+				// fallback
+				toks = append(toks, token{tokOther, string(ch)})
+				i++
+			}
+		}
+		toks = append(toks, token{tokEOF, ""})
+		return toks, nil
+	}
+
+	isSimpleVariableExpr := func(expr string) bool {
+		toks, err := tokenize(expr)
+		if err != nil {
+			return false
+		}
+		// Must start with dollar identifier
+		idx := 0
+		if toks[idx].typ != tokDollarIdent {
+			return false
+		}
+		idx++
+		// allow sequences like .Ident or [String|Number|DollarIdent]
+		for toks[idx].typ != tokEOF {
+			t := toks[idx]
+			if t.typ == tokDot {
+				// must be followed by ident
+				if toks[idx+1].typ != tokIdent {
+					return false
+				}
+				idx += 2
+				continue
+			}
+			if t.typ == tokLBracket {
+				// accept a string, number or dollar ident inside brackets, then a closing bracket
+				if !(toks[idx+1].typ == tokString || toks[idx+1].typ == tokNumber || toks[idx+1].typ == tokDollarIdent || toks[idx+1].typ == tokIdent) {
+					return false
+				}
+				if toks[idx+2].typ != tokRBracket {
+					return false
+				}
+				idx += 3
+				continue
+			}
+			// any pipe, paren, op, ident (unexpected), string, number outside brackets => complex
+			return false
+		}
+		return true
+	}
+
+	// Convert a simple tokenized expression into Go-template form,
+	// converting bracket access into index() calls and $vars -> .vars
+	convertSimpleExprToGo := func(expr string) string {
+		toks, _ := tokenize(expr)
+		// start with base: dollar ident
+		if len(toks) == 0 || toks[0].typ != tokDollarIdent {
+			return expr
+		}
+		base := "." + toks[0].val
+		idx := 1
+		for toks[idx].typ != tokEOF {
+			t := toks[idx]
+			if t.typ == tokDot {
+				// append dot ident
+				if toks[idx+1].typ == tokIdent {
+					base = base + "." + toks[idx+1].val
+					idx += 2
+					continue
+				}
+				// unexpected, bail
+				return expr
+			}
+			if t.typ == tokLBracket {
+				// inner token
+				inner := toks[idx+1]
+				if toks[idx+2].typ != tokRBracket {
+					return expr
+				}
+				var keyExpr string
+				switch inner.typ {
+				case tokString:
+					// re-quote safely
+					keyExpr = strconv.Quote(inner.val)
+				case tokNumber:
+					keyExpr = inner.val
+				case tokDollarIdent:
+					keyExpr = "." + inner.val
+				case tokIdent:
+					// treat bare ident inside bracket as quoted string key
+					keyExpr = strconv.Quote(inner.val)
+				default:
+					return expr
+				}
+				base = "(index " + base + " " + keyExpr + ")"
+				idx += 3
+				continue
+			}
+			// anything else -> bail
+			return expr
+		}
+		return base
+	}
+
 	content = re.ReplaceAllStringFunc(content, func(match string) string {
-		// Không xử lý các directive đã được convert
-		if strings.Contains(match, "{{if") || strings.Contains(match, "{{range") ||
-			strings.Contains(match, "{{else") || strings.Contains(match, "{{end") ||
-			strings.Contains(match, "{{define") || strings.Contains(match, "{{template") {
+		sub := re.FindStringSubmatch(match)
+		if len(sub) < 2 {
 			return match
 		}
+		inner := strings.TrimSpace(sub[1])
 
-		// Xử lý các biến bình thường
-		inner := re.FindStringSubmatch(match)[1]
-		// Thay $name -> .name
-		inner = regexp.MustCompile(`\$(\w+)`).ReplaceAllString(inner, ".$1")
-		return "{{escape " + inner + "}}"
+		// If expression starts with native Go template keyword, keep as-is
+		if toks, _ := tokenize(inner); len(toks) > 0 && toks[0].typ == tokIdent {
+			kw := toks[0].val
+			switch kw {
+			case "if", "range", "else", "end", "define", "template", "with", "block":
+				return match
+			}
+		}
+
+		if isSimpleVariableExpr(inner) {
+			converted := convertSimpleExprToGo(inner)
+			return "{{escape " + converted + "}}"
+		}
+		// For complex expressions, avoid changing structure but still normalize $vars -> .vars
+		innerNorm := regexp.MustCompile(`\$(\w+)`).ReplaceAllString(inner, ".$1")
+		// preserve the original match formatting (trim markers, spacing) by replacing the inner substring
+		return strings.Replace(match, sub[1], innerNorm, 1)
 	})
 
 	return content, nil
+}
+
+// helper char checks
+func isAlpha(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+func isAlphaNum(b byte) bool {
+	return isAlpha(b) || (b >= '0' && b <= '9')
+}
+
+func isDigit(b byte) bool {
+	return b >= '0' && b <= '9'
 }
 
 // processRawVariables xử lý {!! !!}
@@ -499,20 +817,144 @@ func (c *Compiler) combineWithLayout(content, layoutName string) (string, error)
 		return "", fmt.Errorf("error compiling layout %s: %w", layoutName, err)
 	}
 
-	// Tìm và thay thế @yield('content') trong layout
+	// Extract define blocks from content: {{define "name"}}...{{end}}
+	// We must correctly match the corresponding {{end}} for the define, because the
+	// body can contain other {{end}} tokens (from if/range), so a naive regex may
+	// stop at the first {{end}}. We'll scan the content and balance block starts/ends.
+	defines := make(map[string]string)
+	contentNoDefines := content
+	startRe := regexp.MustCompile(`{{\s*define\s*"([^"]+)"\s*}}`)
+	for {
+		loc := startRe.FindStringSubmatchIndex(contentNoDefines)
+		if loc == nil {
+			break
+		}
+		// loc gives [start, end, groupStart, groupEnd]
+		defStart := loc[0]
+		defNameStart := loc[2]
+		defNameEnd := loc[3]
+		defBodyStart := loc[1]
+		name := contentNoDefines[defNameStart:defNameEnd]
+
+		// Now find the matching {{end}} for this define by scanning forward and
+		// balancing nested block starts (if, range, define) and ends.
+		i := defBodyStart
+		depth := 0
+		for i < len(contentNoDefines) {
+			// find next '{{'
+			next := strings.Index(contentNoDefines[i:], "{{")
+			if next == -1 {
+				// unmatched
+				break
+			}
+			i += next
+			// find the end '}}'
+			close := strings.Index(contentNoDefines[i:], "}}")
+			if close == -1 {
+				break
+			}
+			token := strings.TrimSpace(contentNoDefines[i+2 : i+close])
+			if strings.HasPrefix(token, "define") || strings.HasPrefix(token, "if") || strings.HasPrefix(token, "range") || strings.HasPrefix(token, "with") || strings.HasPrefix(token, "block") {
+				depth++
+			} else if token == "end" {
+				if depth == 0 {
+					// body runs from defBodyStart to i (start of this '{{end}}')
+					body := contentNoDefines[defBodyStart:i]
+					defines[name] = body
+					// remove the whole define block from contentNoDefines
+					// blockEnd is i + len("{{end}}")
+					blockEnd := i + close + 2
+					contentNoDefines = contentNoDefines[:defStart] + contentNoDefines[blockEnd:]
+					// continue scanning from start
+					break
+				}
+				depth--
+			}
+			// advance past this '}}'
+			i = i + close + 2
+		}
+		// loop again to find more defines
+	}
+
+	// Helper to replace a specific template placeholder with the defined body if present
+	replaceTemplateWithBody := func(match string) string {
+		// match looks like {{template "name" .}}
+		r := regexp.MustCompile(`{{\s*template\s*"([^"]+)"\s*\.\s*}}`)
+		sub := r.FindStringSubmatch(match)
+		if len(sub) >= 2 {
+			nm := sub[1]
+			if body, ok := defines[nm]; ok {
+				return body
+			}
+			// if no define body, leave as-is (so runtime template lookup may succeed)
+			return match
+		}
+		return match
+	}
+
+	// Replace content placeholder first
 	yieldRe := regexp.MustCompile(`{{\s*template\s*"content"\s*\.\s*}}`)
 	if yieldRe.MatchString(compiledLayout) {
-		return yieldRe.ReplaceAllString(compiledLayout, content), nil
+		compiledLayout = yieldRe.ReplaceAllStringFunc(compiledLayout, replaceTemplateWithBody)
 	}
 
-	// Fallback: tìm bất kỳ yield nào
-	anyYieldRe := regexp.MustCompile(`{{\s*template\s*"[^"]+"\s*\.\s*}}`)
-	if anyYieldRe.MatchString(compiledLayout) {
-		return anyYieldRe.ReplaceAllString(compiledLayout, content), nil
+	// Replace any other {{template "name" .}} with defined body when available
+	anyYieldRe := regexp.MustCompile(`{{\s*template\s*"([^"]+)"\s*\.\s*}}`)
+	compiledLayout = anyYieldRe.ReplaceAllStringFunc(compiledLayout, func(m string) string {
+		sub := anyYieldRe.FindStringSubmatch(m)
+		if len(sub) >= 2 {
+			nm := sub[1]
+			if body, ok := defines[nm]; ok {
+				return body
+			}
+		}
+		return m
+	})
+
+	// If layout contains block placeholders (which provide default content),
+	// and the page provided a section (define) with the same name, replace the
+	// entire block (including its default content) with the page's section body.
+	// This implements Blade-style section overriding where layout blocks are
+	// replaced by page sections.
+	blockRe := regexp.MustCompile(`(?s){{\s*block\s*"([^"]+)"\s*\.\s*}}(.*?){{\s*end\s*}}`)
+	if blockRe.MatchString(compiledLayout) {
+		compiledLayout = blockRe.ReplaceAllStringFunc(compiledLayout, func(m string) string {
+			sub := blockRe.FindStringSubmatch(m)
+			if len(sub) >= 3 {
+				nm := sub[1]
+				if body, ok := defines[nm]; ok {
+					// Use the page-provided body instead of layout default
+					return body
+				}
+				// otherwise keep the default content (sub[2])
+				return sub[2]
+			}
+			return m
+		})
 	}
 
-	// Nếu không tìm thấy yield, append content
-	return compiledLayout + content, nil
+	// If layout had no placeholders replaced, prefer content bodies by appending
+	if contentNoDefines != "" {
+		compiledLayout = compiledLayout + contentNoDefines
+	} else {
+		compiledLayout = compiledLayout + content
+	}
+
+	// Prepend all define blocks as named templates so any {{template "name" .}} lookups
+	// resolve even if we didn't inline them. This prevents 'no such template' errors.
+	if len(defines) > 0 {
+		var defs strings.Builder
+		for nm, body := range defines {
+			defs.WriteString("{{define \"")
+			defs.WriteString(nm)
+			defs.WriteString("\"}}")
+			defs.WriteString(body)
+			defs.WriteString("{{end}}")
+		}
+		compiledLayout = defs.String() + compiledLayout
+	}
+
+	return compiledLayout, nil
 }
 
 // validateTemplateSyntax validate cú pháp template
@@ -529,11 +971,13 @@ func (c *Compiler) validateTemplateSyntax(content string) error {
 		return fmt.Errorf("unbalanced template brackets")
 	}
 
-	// Validate balanced directives (tính tổng số mở và tổng số đóng)
+	// Validate balanced directives (count opening directive tokens vs closing {{end}})
 	startIf := strings.Count(content, "{{if")
 	startRange := strings.Count(content, "{{range")
 	startDefine := strings.Count(content, "{{define")
-	totalStart := startIf + startRange + startDefine
+	startWith := strings.Count(content, "{{with")
+	startBlock := strings.Count(content, "{{block")
+	totalStart := startIf + startRange + startDefine + startWith + startBlock
 	totalEnd := strings.Count(content, "{{end}}")
 	if totalStart != totalEnd {
 		return fmt.Errorf("unbalanced directives: starts=%d (if=%d, range=%d, define=%d) ends=%d", totalStart, startIf, startRange, startDefine, totalEnd)
