@@ -9,8 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
+
+	"blade_engine/engine/expr"
 )
 
 type Compiler struct {
@@ -21,6 +22,9 @@ type Compiler struct {
 	fs           fsys.FS // optional embedded FS, used when mode == "go"
 	manifestPath string
 	manifest     map[string]string // templatePath -> compiledFilename
+	// skipCompiledExtensions lists file extensions (including leading dot) for which
+	// the compiler should NOT write standalone compiled cache files.
+	skipCompiledExtensions []string
 }
 
 func NewCompiler(templatesDir string) *Compiler {
@@ -36,6 +40,23 @@ func NewCompilerWithMode(templatesDir, mode string) *Compiler {
 func NewCompilerWithOptions(templatesDir, mode string, fs fsys.FS) *Compiler {
 	cacheDir := filepath.Join(filepath.Dir(templatesDir), "cache")
 	manifestPath := filepath.Join(cacheDir, "compiled_manifest.json")
+	// initialize default skip list from env or fallback
+	var skipList []string
+	if v := os.Getenv("BLADE_SKIP_COMPILED_EXT"); v != "" {
+		for _, p := range strings.Split(v, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" && !strings.HasPrefix(p, ".") {
+				p = "." + p
+			}
+			if p != "" {
+				skipList = append(skipList, p)
+			}
+		}
+	}
+	if len(skipList) == 0 {
+		skipList = []string{".gohtml", ".html"}
+	}
+
 	c := &Compiler{
 		templatesDir: templatesDir,
 		cacheDir:     cacheDir,
@@ -61,6 +82,7 @@ func NewCompilerWithOptions(templatesDir, mode string, fs fsys.FS) *Compiler {
 				return strings.Join(items, sep)
 			},
 		},
+		skipCompiledExtensions: skipList,
 	}
 
 	// ensure cache dir exists
@@ -196,7 +218,28 @@ func (c *Compiler) shouldWriteCompiled(templatePath string) bool {
 	if strings.HasPrefix(rel, "layouts/") || strings.HasPrefix(rel, "components/") {
 		return false
 	}
+	// skip configured extensions
+	for _, ext := range c.skipCompiledExtensions {
+		if strings.HasSuffix(rel, ext) {
+			return false
+		}
+	}
 	return true
+}
+
+// SetSkipCompiledExtensions replaces the skip list used by the compiler. Extensions should include the leading dot.
+func (c *Compiler) SetSkipCompiledExtensions(exts []string) {
+	cleaned := make([]string, 0, len(exts))
+	for _, e := range exts {
+		if e == "" {
+			continue
+		}
+		if !strings.HasPrefix(e, ".") {
+			e = "." + e
+		}
+		cleaned = append(cleaned, e)
+	}
+	c.skipCompiledExtensions = cleaned
 }
 
 // CompileString biên dịch từ string content
@@ -507,226 +550,8 @@ func (c *Compiler) processUnless(content, templatePath string) (string, error) {
 
 // processVariables xử lý {{ }}
 func (c *Compiler) processVariables(content, templatePath string) (string, error) {
-	// Token-based detector: returns true if expression is a simple $-variable expression
-	// like "$name" or "$user.Name" or "$m["key"]" and contains no pipes, operators,
-	// parentheses, or function calls. Uses a small tokenizer for robustness.
+	// Use the expr parser/AST to robustly convert $-variables and normalize expressions.
 	re := regexp.MustCompile(`{{-?\s*(.*?)\s*-?}}`)
-
-	type tokType int
-	const (
-		tokEOF tokType = iota
-		tokIdent
-		tokDollarIdent
-		tokDot
-		tokLBracket
-		tokRBracket
-		tokString
-		tokNumber
-		tokPipe
-		tokLParen
-		tokRParen
-		tokOp
-		tokComma
-		tokOther
-	)
-
-	type token struct {
-		typ tokType
-		val string
-	}
-
-	tokenize := func(expr string) ([]token, error) {
-		var toks []token
-		i := 0
-		n := len(expr)
-		for i < n {
-			ch := expr[i]
-			// whitespace
-			if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
-				i++
-				continue
-			}
-			switch ch {
-			case '|':
-				toks = append(toks, token{tokPipe, "|"})
-				i++
-			case '(':
-				toks = append(toks, token{tokLParen, "("})
-				i++
-			case ')':
-				toks = append(toks, token{tokRParen, ")"})
-				i++
-			case '.':
-				toks = append(toks, token{tokDot, "."})
-				i++
-			case '[':
-				toks = append(toks, token{tokLBracket, "["})
-				i++
-			case ']':
-				toks = append(toks, token{tokRBracket, "]"})
-				i++
-			case ',':
-				toks = append(toks, token{tokComma, ","})
-				i++
-			case '$':
-				// dollar identifier
-				j := i + 1
-				if j < n && isAlpha(expr[j]) {
-					k := j + 1
-					for k < n && (isAlphaNum(expr[k]) || expr[k] == '_') {
-						k++
-					}
-					toks = append(toks, token{tokDollarIdent, expr[j:k]})
-					i = k
-				} else {
-					toks = append(toks, token{tokOther, string(ch)})
-					i++
-				}
-			case '"', '\'':
-				quote := ch
-				j := i + 1
-				var sb strings.Builder
-				for j < n {
-					if expr[j] == '\\' && j+1 < n {
-						sb.WriteByte(expr[j])
-						sb.WriteByte(expr[j+1])
-						j += 2
-						continue
-					}
-					if expr[j] == quote {
-						j++
-						break
-					}
-					sb.WriteByte(expr[j])
-					j++
-				}
-				toks = append(toks, token{tokString, sb.String()})
-				i = j
-			default:
-				if isDigit(ch) {
-					j := i
-					for j < n && (isDigit(expr[j]) || expr[j] == '.') {
-						j++
-					}
-					toks = append(toks, token{tokNumber, expr[i:j]})
-					i = j
-					continue
-				}
-				if isAlpha(ch) {
-					j := i
-					for j < n && (isAlphaNum(expr[j]) || expr[j] == '_' || expr[j] == '.') {
-						j++
-					}
-					toks = append(toks, token{tokIdent, expr[i:j]})
-					i = j
-					continue
-				}
-				// operators and others
-				if strings.ContainsAny(string(ch), "+-*/%&><=") {
-					toks = append(toks, token{tokOp, string(ch)})
-					i++
-					continue
-				}
-				// fallback
-				toks = append(toks, token{tokOther, string(ch)})
-				i++
-			}
-		}
-		toks = append(toks, token{tokEOF, ""})
-		return toks, nil
-	}
-
-	isSimpleVariableExpr := func(expr string) bool {
-		toks, err := tokenize(expr)
-		if err != nil {
-			return false
-		}
-		// Must start with dollar identifier
-		idx := 0
-		if toks[idx].typ != tokDollarIdent {
-			return false
-		}
-		idx++
-		// allow sequences like .Ident or [String|Number|DollarIdent]
-		for toks[idx].typ != tokEOF {
-			t := toks[idx]
-			if t.typ == tokDot {
-				// must be followed by ident
-				if toks[idx+1].typ != tokIdent {
-					return false
-				}
-				idx += 2
-				continue
-			}
-			if t.typ == tokLBracket {
-				// accept a string, number or dollar ident inside brackets, then a closing bracket
-				if !(toks[idx+1].typ == tokString || toks[idx+1].typ == tokNumber || toks[idx+1].typ == tokDollarIdent || toks[idx+1].typ == tokIdent) {
-					return false
-				}
-				if toks[idx+2].typ != tokRBracket {
-					return false
-				}
-				idx += 3
-				continue
-			}
-			// any pipe, paren, op, ident (unexpected), string, number outside brackets => complex
-			return false
-		}
-		return true
-	}
-
-	// Convert a simple tokenized expression into Go-template form,
-	// converting bracket access into index() calls and $vars -> .vars
-	convertSimpleExprToGo := func(expr string) string {
-		toks, _ := tokenize(expr)
-		// start with base: dollar ident
-		if len(toks) == 0 || toks[0].typ != tokDollarIdent {
-			return expr
-		}
-		base := "." + toks[0].val
-		idx := 1
-		for toks[idx].typ != tokEOF {
-			t := toks[idx]
-			if t.typ == tokDot {
-				// append dot ident
-				if toks[idx+1].typ == tokIdent {
-					base = base + "." + toks[idx+1].val
-					idx += 2
-					continue
-				}
-				// unexpected, bail
-				return expr
-			}
-			if t.typ == tokLBracket {
-				// inner token
-				inner := toks[idx+1]
-				if toks[idx+2].typ != tokRBracket {
-					return expr
-				}
-				var keyExpr string
-				switch inner.typ {
-				case tokString:
-					// re-quote safely
-					keyExpr = strconv.Quote(inner.val)
-				case tokNumber:
-					keyExpr = inner.val
-				case tokDollarIdent:
-					keyExpr = "." + inner.val
-				case tokIdent:
-					// treat bare ident inside bracket as quoted string key
-					keyExpr = strconv.Quote(inner.val)
-				default:
-					return expr
-				}
-				base = "(index " + base + " " + keyExpr + ")"
-				idx += 3
-				continue
-			}
-			// anything else -> bail
-			return expr
-		}
-		return base
-	}
 
 	content = re.ReplaceAllStringFunc(content, func(match string) string {
 		sub := re.FindStringSubmatch(match)
@@ -736,39 +561,44 @@ func (c *Compiler) processVariables(content, templatePath string) (string, error
 		inner := strings.TrimSpace(sub[1])
 
 		// If expression starts with native Go template keyword, keep as-is
-		if toks, _ := tokenize(inner); len(toks) > 0 && toks[0].typ == tokIdent {
-			kw := toks[0].val
+		if toks := regexp.MustCompile(`^\s*([a-zA-Z_][a-zA-Z0-9_]*)`).FindStringSubmatch(inner); len(toks) > 1 {
+			kw := toks[1]
 			switch kw {
 			case "if", "range", "else", "end", "define", "template", "with", "block":
 				return match
 			}
 		}
 
-		if isSimpleVariableExpr(inner) {
-			converted := convertSimpleExprToGo(inner)
-			return "{{escape " + converted + "}}"
+		// Try to parse with our expression parser
+		p := expr.NewParser(inner)
+		ast, err := p.Parse()
+		if err != nil {
+			// fallback: simple $var -> .var normalization
+			innerNorm := regexp.MustCompile(`\$(\w+)`).ReplaceAllString(inner, ".$1")
+			return strings.Replace(match, sub[1], innerNorm, 1)
 		}
-		// For complex expressions, avoid changing structure but still normalize $vars -> .vars
-		innerNorm := regexp.MustCompile(`\$(\w+)`).ReplaceAllString(inner, ".$1")
-		// preserve the original match formatting (trim markers, spacing) by replacing the inner substring
-		return strings.Replace(match, sub[1], innerNorm, 1)
+
+		// Convert AST back to template expression
+		s, err := expr.ToTemplate(ast)
+		if err != nil {
+			innerNorm := regexp.MustCompile(`\$(\w+)`).ReplaceAllString(inner, ".$1")
+			return strings.Replace(match, sub[1], innerNorm, 1)
+		}
+
+		// If it's a simple dollar variable, wrap with escape
+		if expr.IsSimpleDollarVariable(ast) {
+			return "{{escape " + s + "}}"
+		}
+
+		// otherwise preserve the original delimiters/spacing
+		return strings.Replace(match, sub[1], s, 1)
 	})
 
 	return content, nil
 }
 
 // helper char checks
-func isAlpha(b byte) bool {
-	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
-}
-
-func isAlphaNum(b byte) bool {
-	return isAlpha(b) || (b >= '0' && b <= '9')
-}
-
-func isDigit(b byte) bool {
-	return b >= '0' && b <= '9'
-}
+// NOTE: previous tokenizer helpers removed after migrating to expr parser.
 
 // processRawVariables xử lý {!! !!}
 func (c *Compiler) processRawVariables(content, templatePath string) (string, error) {
@@ -917,7 +747,10 @@ func (c *Compiler) combineWithLayout(content, layoutName string) (string, error)
 	// This implements Blade-style section overriding where layout blocks are
 	// replaced by page sections.
 	blockRe := regexp.MustCompile(`(?s){{\s*block\s*"([^"]+)"\s*\.\s*}}(.*?){{\s*end\s*}}`)
-	if blockRe.MatchString(compiledLayout) {
+	// Iteratively replace blocks to correctly handle nested blocks: replace until
+	// no block tokens remain or replacements stop changing the layout.
+	for blockRe.MatchString(compiledLayout) {
+		before := compiledLayout
 		compiledLayout = blockRe.ReplaceAllStringFunc(compiledLayout, func(m string) string {
 			sub := blockRe.FindStringSubmatch(m)
 			if len(sub) >= 3 {
@@ -931,6 +764,9 @@ func (c *Compiler) combineWithLayout(content, layoutName string) (string, error)
 			}
 			return m
 		})
+		if compiledLayout == before {
+			break
+		}
 	}
 
 	// If layout had no placeholders replaced, prefer content bodies by appending
@@ -945,13 +781,21 @@ func (c *Compiler) combineWithLayout(content, layoutName string) (string, error)
 	if len(defines) > 0 {
 		var defs strings.Builder
 		for nm, body := range defines {
+			// don't prepend if compiledLayout already contains a define or block for this name
+			// ({{block "name" ...}} also registers a template with that name and will
+			// cause a duplicate-definition error if we prepend another {{define}}).
+			if strings.Contains(compiledLayout, "{{define \""+nm+"\"}}") || strings.Contains(compiledLayout, "{{block \""+nm+"\"") {
+				continue
+			}
 			defs.WriteString("{{define \"")
 			defs.WriteString(nm)
 			defs.WriteString("\"}}")
 			defs.WriteString(body)
 			defs.WriteString("{{end}}")
 		}
-		compiledLayout = defs.String() + compiledLayout
+		if defs.Len() > 0 {
+			compiledLayout = defs.String() + compiledLayout
+		}
 	}
 
 	return compiledLayout, nil

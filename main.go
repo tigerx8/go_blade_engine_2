@@ -75,8 +75,7 @@ func main() {
 			defer watcher.Stop()
 		}
 	}
-
-	http.HandleFunc("/blade", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
 		data := map[string]interface{}{
@@ -86,6 +85,7 @@ func main() {
 				{Name: "Item 2", Price: "$20", HTMLContent: "<strong>Item 2</strong>"},
 				{Name: "Item 3", Price: "$30", HTMLContent: "<strong>Item 3</strong>"},
 			},
+			"isSticky": true,
 		}
 
 		err := blade.Render(w, "pages/home.blade.tpl", data)
@@ -98,8 +98,31 @@ func main() {
 		duration := time.Since(start)
 		log.Printf("Rendered template in %v", duration)
 	})
-
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/about", func(w http.ResponseWriter, r *http.Request) {
+		data := map[string]interface{}{
+			"title":       "About Us",
+			"isSticky":    false,
+			"headerClass": "bg-info",
+		}
+		err := blade.Render(w, "pages/about.blade.tpl", data)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	})
+	http.HandleFunc("/contact", func(w http.ResponseWriter, r *http.Request) {
+		data := map[string]interface{}{
+			"title":       "Contact Us",
+			"isSticky":    false,
+			"headerClass": "bg-success",
+		}
+		err := blade.Render(w, "pages/contact.blade.tpl", data)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	})
+	http.HandleFunc("/gohtml", func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
 		data := map[string]interface{}{

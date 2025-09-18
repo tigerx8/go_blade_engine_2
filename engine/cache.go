@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"html/template"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,9 +34,18 @@ type CacheManager struct {
 // NewCacheManager tạo cache manager mới
 func NewCacheManager(maxSizeMB int, ttlMinutes, cleanupMinutes int) *CacheManager {
 	maxSize := maxSizeMB * 1024 * 1024 // Convert MB to bytes
-
-	cacheDir := "./cache"
-	os.MkdirAll(cacheDir, 0755)
+	// Allow overriding cache directory via env var; otherwise use OS temp dir to avoid creating project-level ./cache
+	cacheDir := os.Getenv("BLADE_CACHE_DIR")
+	if cacheDir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			cacheDir = filepath.Join(os.TempDir(), "blade_cache")
+		} else {
+			cacheDir = filepath.Join(wd, "cache")
+		}
+	}
+	// Create directory, but be tolerant if creation fails in constrained environments
+	_ = os.MkdirAll(cacheDir, 0755)
 	cm := &CacheManager{
 		items:           make(map[string]*CacheItem),
 		maxSize:         maxSize,
@@ -44,6 +54,7 @@ func NewCacheManager(maxSizeMB int, ttlMinutes, cleanupMinutes int) *CacheManage
 		stopCleanup:     make(chan bool),
 		cacheDir:        cacheDir,
 	}
+	log.Println("Using cache directory: " + cacheDir)
 
 	// Bắt đầu routine dọn dẹp cache định kỳ
 	go cm.startCleanupRoutine()
