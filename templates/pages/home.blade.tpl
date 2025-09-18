@@ -8,11 +8,11 @@ Overridden Inner
 @section('content')
 
 <header class="bg-primary text-white text-center py-5">
-  <div class="container">
-    <h1>Welcome to MySite</h1>
-    <p class="lead">A simple homepage built with Bootstrap 5</p>
-    <a href="#" class="btn btn-light btn-lg mt-3">Get Started</a>
-  </div>
+    <div class="container">
+        <h1>Welcome to MySite</h1>
+        <p class="lead">A simple homepage built with Bootstrap 5</p>
+        <a href="#" class="btn btn-light btn-lg mt-3">Get Started</a>
+    </div>
 </header>
 
 <section class="py-5">
@@ -20,6 +20,9 @@ Overridden Inner
         <div class="py-5">
             @yield('inner')
         </div>
+        <p>Request Host: {{ call ._fiber.Header "Host" }}</p>
+        <p>Query foo: {{ call ._fiber.Query "foo" }}</p>
+        <p>Param id: {{ call ._fiber.Param "id" }}</p>
         <h1>Hello, {{ $user.Name }}!</h1>
 
         @if ($user.IsAdmin)

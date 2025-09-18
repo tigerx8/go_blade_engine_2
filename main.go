@@ -6,9 +6,13 @@ import (
 	"fmt"
 	fsys "io/fs"
 	"log"
-	"net/http"
+	"strings"
 	"time"
+
+	"github.com/gofiber/fiber/v2"
 )
+
+// ... adapter moved to engine/fiber_adapter.go
 
 // Embed templates at build time
 //
@@ -26,6 +30,7 @@ type Product struct {
 	Price       string
 	HTMLContent string
 }
+
 type Item struct {
 	HTMLContent string
 }
@@ -41,7 +46,7 @@ func main() {
 	config := engine.BladeConfig{
 		TemplatesDir:      "./templates",
 		CacheEnabled:      true,
-		Development:       true,    // Set true để development mode (auto reload)
+		Development:       false,   // Set true để development mode (auto reload)
 		CacheMaxSizeMB:    50,      // 50MB cache
 		CacheTTLMinutes:   30,      // 30 minutes
 		TemplateExtension: ".tpl",  // dùng ".tpl" nếu là Blade
@@ -51,31 +56,12 @@ func main() {
 
 	blade := engine.NewBladeEngineWithConfig(config)
 
-	// Validate all templates trước khi start
-	if err := blade.ValidateAllTemplates(); err != nil {
-		log.Printf("Template validation errors: %v", err)
-		// Có thể continue hoặc exit tùy requirement
-	}
+	// Thiết lập Fiber với adapter
+	app := fiber.New(fiber.Config{
+		Views: &engine.FiberViewsAdapter{Engine: blade},
+	})
 
-	// Preload với error logging
-	if err := blade.PreloadTemplates(); err != nil {
-		log.Printf("Preload warnings: %v", err)
-	}
-
-	// // Debug template cụ thể nếu cần
-	// blade.DebugTemplate("pages/home.gohtml")
-
-	// Trong development mode, start file watcher
-	if config.Development {
-		watcher, err := engine.NewFileWatcher(blade, "./templates")
-		if err != nil {
-			log.Printf("Could not start file watcher: %v", err)
-		} else {
-			watcher.Start()
-			defer watcher.Stop()
-		}
-	}
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	app.Get("/", func(c *fiber.Ctx) error {
 		start := time.Now()
 
 		data := map[string]interface{}{
@@ -88,42 +74,30 @@ func main() {
 			"isSticky": true,
 		}
 
-		err := blade.Render(w, "pages/home.blade.tpl", data)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Log performance
 		duration := time.Since(start)
 		log.Printf("Rendered template in %v", duration)
+		return c.Render("pages/home.blade.tpl", engine.WithFiberContext(c, data))
 	})
-	http.HandleFunc("/about", func(w http.ResponseWriter, r *http.Request) {
+
+	app.Get("/about", func(c *fiber.Ctx) error {
 		data := map[string]interface{}{
 			"title":       "About Us",
 			"isSticky":    false,
 			"headerClass": "bg-info",
 		}
-		err := blade.Render(w, "pages/about.blade.tpl", data)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+		return c.Render("pages/about.blade.tpl", engine.WithFiberContext(c, data))
 	})
-	http.HandleFunc("/contact", func(w http.ResponseWriter, r *http.Request) {
+
+	app.Get("/contact", func(c *fiber.Ctx) error {
 		data := map[string]interface{}{
 			"title":       "Contact Us",
 			"isSticky":    false,
 			"headerClass": "bg-success",
 		}
-		err := blade.Render(w, "pages/contact.blade.tpl", data)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+		return c.Render("pages/contact.blade.tpl", engine.WithFiberContext(c, data))
 	})
-	http.HandleFunc("/gohtml", func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
+
+	app.Get("/gohtml", func(c *fiber.Ctx) error {
 
 		data := map[string]interface{}{
 			"user": User{Name: "John Doe", IsAdmin: true},
@@ -133,32 +107,32 @@ func main() {
 			},
 		}
 
-		err := blade.Render(w, "pages/home.gohtml", data)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Log performance
-		duration := time.Since(start)
-		log.Printf("Rendered template in %v", duration)
+		return c.Render("pages/home.gohtml", engine.WithFiberContext(c, data))
 	})
 
 	// Endpoint để xem cache stats
-	http.HandleFunc("/cache-stats", func(w http.ResponseWriter, r *http.Request) {
+	app.Get("/cache-stats", func(c *fiber.Ctx) error {
 		stats := blade.CacheStats()
-		fmt.Fprintf(w, "Cache Statistics:\n")
+		var b strings.Builder
+		b.WriteString("Cache Statistics:\n")
 		for k, v := range stats {
-			fmt.Fprintf(w, "%s: %v\n", k, v)
+			b.WriteString(fmt.Sprintf("%s: %v\n", k, v))
 		}
+		return c.Type("text").SendString(b.String())
 	})
 
 	// Endpoint để clear cache
-	http.HandleFunc("/clear-cache", func(w http.ResponseWriter, r *http.Request) {
+	app.Get("/clear-cache", func(c *fiber.Ctx) error {
 		blade.ClearCache()
-		fmt.Fprintf(w, "Cache cleared successfully")
+		return c.Type("text").SendString("Cache cleared successfully")
+	})
+
+	// Expose compiler stats endpoint
+	app.Get("/compiler-stats", func(c *fiber.Ctx) error {
+		out := blade.CompilerStatsHandler()(nil)
+		return c.Type("text").SendString(out)
 	})
 
 	fmt.Println("Server running on http://localhost:5004")
-	log.Fatal(http.ListenAndServe(":5004", nil))
+	log.Fatal(app.Listen(":5004"))
 }

@@ -1,4 +1,4 @@
-{{define "title"}}{{escape .title}}{{end}}{{define "inner"}}{{end}}{{define "content"}}<section class="py-5">
+{{define "content"}}<section class="py-5">
     <div class="container">
         <h1>Contact Us</h1>
         <p>If you have any questions or would like to get in touch, please reach out to us through the following methods:</p>
@@ -14,7 +14,7 @@
             <area shape="rect" coords="290,350,550,600" alt="Website Area" href="https://www.mysite.com">
         </map>
     </div>
-</section>{{end}}<!DOCTYPE html>
+</section>{{end}}{{define "title"}}{{escape .title}}{{end}}{{define "inner"}}{{end}}<!DOCTYPE html>
 <html lang="en">
 
 <head>

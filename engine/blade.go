@@ -6,21 +6,30 @@ import (
 	"html/template"
 	"io"
 	fsys "io/fs"
+	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // BladeEngine với cache system
 type BladeEngine struct {
-	templatesDir      string
-	templateExtension string
-	cacheManager      *CacheManager
-	compiler          *Compiler
-	enableCache       bool
-	development       bool    // Chế độ development (tắt cache)
-	mode              string  // "blade" or "go"
-	fs                fsys.FS // optional embedded FS for go mode
+	templatesDir       string
+	templateExtension  string
+	cacheManager       *CacheManager
+	compiler           *Compiler
+	goCompiler         *Compiler
+	autoModeExtensions []string
+	// instrumentation for which compiler was used recently
+	mu               sync.Mutex
+	lastUsedCompiler string
+	usageCounts      map[string]int
+	enableCache      bool
+	development      bool    // Chế độ development (tắt cache)
+	mode             string  // "blade" or "go"
+	fs               fsys.FS // optional embedded FS for go mode
 }
 
 // BladeConfig cấu hình cho Blade Engine
@@ -33,13 +42,25 @@ type BladeConfig struct {
 	CacheTTLMinutes   int
 	Mode              string  // "blade" or "go"
 	EmbeddedFS        fsys.FS // optional: use embed.FS when Mode == "go"
+	// SkipCompiledExtensions optionally configures which file extensions should not have compiled cache files written.
+	// Example: []string{".gohtml", ".html"}
+	SkipCompiledExtensions []string
+	// AutoModeExtensions configures which extensions should switch to the native Go compiler.
+	// Default: [".gohtml", ".html"]
+	AutoModeExtensions []string
+	// DiskCacheOnly when true disables the in-memory template cache and relies only on
+	// compiler-produced compiled files on disk. This is useful when you want to avoid
+	// storing parsed *template.Template objects in process memory.
+	DiskCacheOnly bool
 }
 
 // NewBladeEngineWithConfig tạo Blade Engine với cấu hình
 func NewBladeEngineWithConfig(config BladeConfig) *BladeEngine {
 	var cacheManager *CacheManager
 
-	if config.CacheEnabled {
+	// If DiskCacheOnly is requested, avoid creating the in-memory CacheManager.
+	// Compiled files on disk are still managed by the Compiler (it creates cacheDir).
+	if config.CacheEnabled && !config.DiskCacheOnly {
 		cacheManager = NewCacheManager(config.CacheMaxSizeMB, config.CacheTTLMinutes, 5)
 	}
 
@@ -52,22 +73,68 @@ func NewBladeEngineWithConfig(config BladeConfig) *BladeEngine {
 	hybrid := NewHybridFS(config.TemplatesDir, config.EmbeddedFS)
 	fsForCompiler = hybrid
 	// When in blade mode we keep compiler file IO on disk (compiler uses os.ReadFile)
-	compiler := NewCompilerWithOptions(config.TemplatesDir, m, fsForCompiler)
+	compiler := NewCompilerWithOptions(config.TemplatesDir, "blade", fsForCompiler)
+	// Also create a native Go compiler that can parse .gohtml/.html templates using the embedded FS when needed
+	goCompiler := NewCompilerWithOptions(config.TemplatesDir, "go", config.EmbeddedFS)
 
-	be := &BladeEngine{
-		templatesDir:      config.TemplatesDir,
-		templateExtension: config.TemplateExtension,
-		cacheManager:      cacheManager,
-		compiler:          compiler,
-		enableCache:       config.CacheEnabled,
-		development:       config.Development,
-		mode:              m,
-		fs:                config.EmbeddedFS,
+	autoExts := config.AutoModeExtensions
+	if len(autoExts) == 0 {
+		autoExts = []string{".gohtml", ".html"}
 	}
 
-	// If using native Go mode, remove any legacy compiled cache files for .gohtml
-	if be.mode == "go" && be.cacheManager != nil {
-		_ = be.cacheManager.CleanupCompiledForExtension(".gohtml")
+	be := &BladeEngine{
+		templatesDir:       config.TemplatesDir,
+		templateExtension:  config.TemplateExtension,
+		cacheManager:       cacheManager,
+		compiler:           compiler,
+		goCompiler:         goCompiler,
+		autoModeExtensions: autoExts,
+		usageCounts:        make(map[string]int),
+		enableCache:        config.CacheEnabled && !config.DiskCacheOnly,
+		development:        config.Development,
+		mode:               m,
+		fs:                 config.EmbeddedFS,
+	}
+	// Validate all templates trước khi start
+	if err := be.ValidateAllTemplates(); err != nil {
+		log.Printf("Template validation errors: %v", err)
+		// Có thể continue hoặc exit tùy requirement
+	}
+
+	// Preload với error logging
+	if err := be.PreloadTemplates(); err != nil {
+		log.Printf("Preload warnings: %v", err)
+	}
+
+	// Trong development mode, start file watcher
+	if config.Development {
+		watcher, err := NewFileWatcher(be, config.TemplatesDir)
+		if err != nil {
+			log.Printf("Could not start file watcher: %v", err)
+		} else {
+			watcher.Start()
+			defer watcher.Stop()
+		}
+	}
+	// If using native Go mode and cache is enabled, remove any legacy compiled cache files for configured extensions
+	if be.mode == "go" && be.cacheManager != nil && be.enableCache {
+		// perform cleanup for all configured skip extensions
+		var exts []string
+		if len(config.SkipCompiledExtensions) > 0 {
+			exts = config.SkipCompiledExtensions
+		} else {
+			exts = []string{".gohtml", ".html"}
+		}
+		for _, ext := range exts {
+			_ = be.cacheManager.CleanupCompiledForExtension(ext)
+		}
+		// propagate skip list to compiler as well
+		be.compiler.SetSkipCompiledExtensions(exts)
+	} else {
+		// Even if not in go mode, allow config to set skip list on compiler
+		if len(config.SkipCompiledExtensions) > 0 {
+			be.compiler.SetSkipCompiledExtensions(config.SkipCompiledExtensions)
+		}
 	}
 
 	// // Always remove legacy compiled files for blade templates (e.g., .blade.tpl)
@@ -132,7 +199,8 @@ func (b *BladeEngine) renderWithCache(w io.Writer, templateName string, data int
 func (b *BladeEngine) renderWithoutCache(w io.Writer, templateName string, data interface{}) error {
 	templatePath := filepath.Join(b.templatesDir, templateName)
 	fmt.Println("templatePath", templatePath)
-	tmpl, err := b.compiler.ParseTemplate(templatePath)
+	comp := b.chooseCompilerFor(templateName)
+	tmpl, err := comp.ParseTemplate(templatePath)
 	if err != nil {
 		return err
 	}
@@ -151,8 +219,11 @@ func (b *BladeEngine) compileAndCacheTemplate(templateName string) (*template.Te
 		}
 	}
 
+	// Choose compiler based on extension
+	comp := b.chooseCompilerFor(templateName)
+
 	// Compile template
-	tmpl, err := b.compiler.ParseTemplate(templatePath)
+	tmpl, err := comp.ParseTemplate(templatePath)
 	if err != nil {
 		return nil, 0, fmt.Errorf("error compiling template %s: %w", templateName, err)
 	}
@@ -349,4 +420,73 @@ func (b *BladeEngine) estimateTemplateSize(templatePath string, tmpl *template.T
 	}
 
 	return buf.Len(), nil
+}
+
+// chooseCompilerFor selects the appropriate compiler based on template filename extension
+// and records which compiler was used for debugging/metrics.
+func (b *BladeEngine) chooseCompilerFor(templateName string) *Compiler {
+	// default
+	comp := b.compiler
+	chosen := "blade"
+	for _, ext := range b.autoModeExtensions {
+		if strings.HasSuffix(templateName, ext) {
+			if b.goCompiler != nil {
+				comp = b.goCompiler
+				chosen = "go"
+			}
+			break
+		}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.lastUsedCompiler = chosen
+	b.usageCounts[chosen] = b.usageCounts[chosen] + 1
+	// log selection for runtime debugging
+	log.Printf("BladeEngine: chose %s compiler for %s", chosen, templateName)
+	return comp
+}
+
+// LastUsedCompiler returns the name of the last compiler used ("blade" or "go") and a copy of usage counts.
+func (b *BladeEngine) LastUsedCompiler() (string, map[string]int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	copyCounts := make(map[string]int, len(b.usageCounts))
+	for k, v := range b.usageCounts {
+		copyCounts[k] = v
+	}
+	return b.lastUsedCompiler, copyCounts
+}
+
+// CompilerStatsHandler returns an http.HandlerFunc that writes last-used compiler and usage counts
+func (b *BladeEngine) CompilerStatsHandler() func(w io.Writer) string {
+	// Note: return a helper that returns a string for simplicity; caller may wrap it for HTTP
+	return func(w io.Writer) string {
+		last, counts := b.LastUsedCompiler()
+		var sb strings.Builder
+		sb.WriteString("last_used:")
+		sb.WriteString(last)
+		sb.WriteString("\n")
+		for k, v := range counts {
+			sb.WriteString(k)
+			sb.WriteString(": ")
+			sb.WriteString(fmt.Sprintf("%d", v))
+			sb.WriteString("\n")
+		}
+		out := sb.String()
+		if w != nil {
+			_, _ = w.Write([]byte(out))
+		}
+		return out
+	}
+}
+
+// CompilerStatsHTTPHandler returns an http.HandlerFunc that writes the compiler stats
+func (b *BladeEngine) CompilerStatsHTTPHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Use the helper to get the output string and also write it
+		helper := b.CompilerStatsHandler()
+		out := helper(nil)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(out))
+	}
 }
