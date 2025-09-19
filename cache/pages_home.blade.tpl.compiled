@@ -1,4 +1,4 @@
-{{define "content"}}<header class="bg-primary text-white text-center py-5">
+{{define "title"}}Welcome to Our Website{{end}}{{define "inner"}}Overridden Inner{{end}}{{define "content"}}<header class="bg-primary text-white text-center py-5">
     <div class="container">
         <h1>Welcome to MySite</h1>
         <p class="lead">A simple homepage built with Bootstrap 5</p>
@@ -9,24 +9,24 @@
 <section class="py-5">
     <div class="container">
         <div class="py-5">
-            {{template "inner" .}}
+            {{ template "inner" . }}
         </div>
-        <p>Request Host: {{ call ._fiber.Header "Host" }}</p>
-        <p>Query foo: {{ call ._fiber.Query "foo" }}</p>
-        <p>Param id: {{ call ._fiber.Param "id" }}</p>
-        <h1>Hello, {{escape .user.Name}}!</h1>
+        <p>Request Host: {{ ._fiber.Header "Host" }}</p>
+        <p>Query foo: {{ ._fiber.Query "foo" }}</p>
+        <p>Param id: {{ ._fiber.Param "id" }}</p>
+        <h1>Hello, {{ .user.Name }}!</h1>
 
-        {{if .user.IsAdmin}}<p class="admin">You have administrator privileges</p>{{else}}<p>Welcome to our website!</p>{{end}}
+        {{ if .user.IsAdmin }}<p class="admin">You have administrator privileges</p>{{ else }}<p>Welcome to our website!</p>{{ end }}
         <h3>Test @if in attribute</h3>
-        <p class="{{if .user.IsAdmin}}admin{{else}}user{{end}}">This paragraph has a dynamic class based on user role.</p>
+        <p class="{{ if .user.IsAdmin }}admin{{ else }}user{{ end }}">This paragraph has a dynamic class based on user role.</p>
         <div class="items">
             <h2>Our items</h2>
             <ul>
-                {{range .items}}<li>
+                {{ range .items }}<li>
                     <strong>{{ .Name }}</strong>
                     <span>{{raw .Price}}</span>
                     <span>{{raw .HTMLContent}}</span>
-                </li>{{end}}
+                </li>{{ end }}
             </ul>
         </div>
         <h3>Key Features</h3>
@@ -57,7 +57,7 @@
             </div>
         </div>
     </div>
-</section>{{end}}{{define "title"}}Welcome to Our Website{{end}}{{define "inner"}}Overridden Inner{{end}}<!DOCTYPE html>
+</section>{{end}}<!DOCTYPE html>
 <html lang="en">
 
 <head>
@@ -69,8 +69,8 @@
 
 <body>
   <nav class="navbar navbar-expand-lg navbar-light 
-{{if .isSticky}}sticky {{end}} 
-{{if .headerClass}} {{escape .headerClass}}{{else}}bg-light{{end}}">
+{{ if .isSticky }}sticky {{ end }} 
+{{ if .headerClass }} {{ .headerClass }}{{ else }}bg-light{{ end }}">
   <div class="container">
     <a class="navbar-brand" href="/">MySite</a>
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
@@ -100,22 +100,22 @@
         <div class="py-5">
             Overridden Inner
         </div>
-        <p>Request Host: {{ call ._fiber.Header "Host" }}</p>
-        <p>Query foo: {{ call ._fiber.Query "foo" }}</p>
-        <p>Param id: {{ call ._fiber.Param "id" }}</p>
-        <h1>Hello, {{escape .user.Name}}!</h1>
+        <p>Request Host: {{ ._fiber.Header "Host" }}</p>
+        <p>Query foo: {{ ._fiber.Query "foo" }}</p>
+        <p>Param id: {{ ._fiber.Param "id" }}</p>
+        <h1>Hello, {{ .user.Name }}!</h1>
 
-        {{if .user.IsAdmin}}<p class="admin">You have administrator privileges</p>{{else}}<p>Welcome to our website!</p>{{end}}
+        {{ if .user.IsAdmin }}<p class="admin">You have administrator privileges</p>{{ else }}<p>Welcome to our website!</p>{{ end }}
         <h3>Test @if in attribute</h3>
-        <p class="{{if .user.IsAdmin}}admin{{else}}user{{end}}">This paragraph has a dynamic class based on user role.</p>
+        <p class="{{ if .user.IsAdmin }}admin{{ else }}user{{ end }}">This paragraph has a dynamic class based on user role.</p>
         <div class="items">
             <h2>Our items</h2>
             <ul>
-                {{range .items}}<li>
+                {{ range .items }}<li>
                     <strong>{{ .Name }}</strong>
                     <span>{{raw .Price}}</span>
                     <span>{{raw .HTMLContent}}</span>
-                </li>{{end}}
+                </li>{{ end }}
             </ul>
         </div>
         <h3>Key Features</h3>

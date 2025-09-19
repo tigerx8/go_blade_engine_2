@@ -27,7 +27,7 @@ type BladeEngine struct {
 	lastUsedCompiler string
 	usageCounts      map[string]int
 	enableCache      bool
-	development      bool    // Chế độ development (tắt cache)
+	development      bool    // Development mode (disables cache)
 	mode             string  // "blade" or "go"
 	fs               fsys.FS // optional embedded FS for go mode
 }
@@ -148,7 +148,7 @@ func NewBladeEngineWithConfig(config BladeConfig) *BladeEngine {
 
 }
 
-// NewBladeEngine tạo Blade Engine với cấu hình mặc định
+// NewBladeEngine creates a Blade Engine with default configuration
 func NewBladeEngine(templatesDir string) *BladeEngine {
 	return NewBladeEngineWithConfig(BladeConfig{
 		TemplatesDir:    templatesDir,
@@ -161,12 +161,12 @@ func NewBladeEngine(templatesDir string) *BladeEngine {
 
 // Render render template với data
 func (b *BladeEngine) Render(w io.Writer, templateName string, data interface{}) error {
-	// Trong chế độ development, không sử dụng cache
+	// In development mode, do not use cache
 	if b.development {
 		return b.renderWithoutCache(w, templateName, data)
 	}
 
-	// Sử dụng cache nếu được enable
+	// Use cache if enabled
 	if b.enableCache && b.cacheManager != nil {
 		return b.renderWithCache(w, templateName, data)
 	}
@@ -356,7 +356,7 @@ func (b *BladeEngine) EnableCache(enabled bool) {
 	b.enableCache = enabled
 }
 
-// SetDevelopmentMode đặt chế độ development
+// SetDevelopmentMode sets development mode
 func (b *BladeEngine) SetDevelopmentMode(development bool) {
 	b.development = development
 	// Recreate compiler to use HybridFS (disk-first, fallback to embedded)
@@ -381,7 +381,7 @@ func (b *BladeEngine) IsBladeMode() bool {
 	return b.mode == "blade"
 }
 
-// GetCachedTemplates trả về danh sách templates đã cache
+// GetCachedTemplates returns the list of cached templates
 func (b *BladeEngine) GetCachedTemplates() []string {
 	if b.cacheManager != nil {
 		return b.cacheManager.GetKeys()
@@ -412,7 +412,7 @@ func (b *BladeEngine) estimateTemplateSize(templatePath string, tmpl *template.T
 	// Thử execute template với dữ liệu rỗng
 	err := tmpl.Execute(&buf, map[string]interface{}{})
 	if err != nil {
-		// Nếu không execute được, trả về file size
+		// If execution fails, return the file size
 		if fileInfo, err := os.Stat(templatePath); err == nil {
 			return int(fileInfo.Size()), nil
 		}

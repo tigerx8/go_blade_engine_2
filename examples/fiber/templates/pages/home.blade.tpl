@@ -12,9 +12,9 @@
     <p>You are an admin.</p>
     {{ end }}
 
-    <p>Request Host: {{ call ._fiber.Header "Host" }}</p>
-    <p>Query foo: {{ call ._fiber.Query "foo" }}</p>
-    <p>Param id: {{ call ._fiber.Param "id" }}</p>
+    <p>Request Host: {{ ._fiber.Header "Host" }}</p>
+    <p>Query foo: {{ ._fiber.Query "foo" }}</p>
+    <p>Param id: {{ ._fiber.Param "id" }}</p>
 </body>
 
 </html>

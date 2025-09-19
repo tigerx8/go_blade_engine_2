@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -31,8 +30,9 @@ func TestFiberAdapter_Injection(t *testing.T) {
 	// Write a simple template that uses _fiber helpers
 	tpl := `<!doctype html>
 <html><body>
-Host: {{ call ._fiber.Header "Host" }}
-Query foo: {{ call ._fiber.Query "foo" }}
+Type: {{ printf "%T" ._fiber }}
+Host: {{ ._fiber.Header "Host" }}
+Query foo: {{ ._fiber.Query "foo" }}
 </body></html>`
 	if err := os.WriteFile(filepath.Join(pagesDir, "home.blade.tpl"), []byte(tpl), 0644); err != nil {
 		t.Fatalf("write template: %v", err)
@@ -58,7 +58,7 @@ Query foo: {{ call ._fiber.Query "foo" }}
 	// Create request with query param using httptest and use Fiber's app.Test
 	req := httptest.NewRequest("GET", "/pages/home?foo=bar", nil)
 	req.Host = "example.local"
-	resp, err := app.Test(req, 5*time.Second)
+	resp, err := app.Test(req, 5000)
 	if err != nil {
 		t.Fatalf("http do: %v", err)
 	}

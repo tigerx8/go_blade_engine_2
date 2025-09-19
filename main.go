@@ -55,10 +55,11 @@ func main() {
 	}
 
 	blade := engine.NewBladeEngineWithConfig(config)
+	adapter := engine.FiberViewsAdapter{Engine: blade}
 
 	// Thiết lập Fiber với adapter
 	app := fiber.New(fiber.Config{
-		Views: &engine.FiberViewsAdapter{Engine: blade},
+		Views: &adapter,
 	})
 
 	app.Get("/", func(c *fiber.Ctx) error {
@@ -76,7 +77,7 @@ func main() {
 
 		duration := time.Since(start)
 		log.Printf("Rendered template in %v", duration)
-		return c.Render("pages/home.blade.tpl", engine.WithFiberContext(c, data))
+		return adapter.RenderWithCtx(c, "pages/home.blade.tpl", engine.WithFiberContext(c, data))
 	})
 
 	app.Get("/about", func(c *fiber.Ctx) error {

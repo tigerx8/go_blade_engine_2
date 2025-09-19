@@ -27,8 +27,8 @@ func (v *FiberViewsAdapter) Load() error {
 // data value suitable for passing to template execution. It accepts any data
 // shape and returns a map[string]interface{} that includes original fields plus
 // the `_fiber` entry.
-func WithFiberContext(c *fiber.Ctx, data interface{}) interface{} {
-	// If data is already a map[string]interface{}, clone and add _fiber
+func WithFiberContext(c *fiber.Ctx, data interface{}) map[string]interface{} {
+	// Always return a map[string]interface{} with _fiber as a concrete *SafeFiberCtx
 	if data == nil {
 		return map[string]interface{}{"_fiber": NewSafeFiberCtx(c)}
 	}
@@ -40,7 +40,6 @@ func WithFiberContext(c *fiber.Ctx, data interface{}) interface{} {
 		nm["_fiber"] = NewSafeFiberCtx(c)
 		return nm
 	}
-	// For other data types, place them under "_data" and add _fiber
 	return map[string]interface{}{"_fiber": NewSafeFiberCtx(c), "_data": data}
 }
 
@@ -52,5 +51,7 @@ func (v *FiberViewsAdapter) RenderWithCtx(c *fiber.Ctx, name string, data interf
 	enriched := WithFiberContext(c, data)
 	// Stream to the response body writer for lower memory usage
 	w := c.Context().Response.BodyWriter()
+	c.Set("Content-Type", "text/html; charset=utf-8")
+	// or c.Type("html")
 	return v.Engine.Render(w, name, enriched)
 }

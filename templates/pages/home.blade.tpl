@@ -20,9 +20,9 @@ Overridden Inner
         <div class="py-5">
             @yield('inner')
         </div>
-        <p>Request Host: {{ call ._fiber.Header "Host" }}</p>
-        <p>Query foo: {{ call ._fiber.Query "foo" }}</p>
-        <p>Param id: {{ call ._fiber.Param "id" }}</p>
+        <p>Request Host: {{ ._fiber.Header "Host" }}</p>
+        <p>Query foo: {{ ._fiber.Query "foo" }}</p>
+        <p>Param id: {{ ._fiber.Param "id" }}</p>
         <h1>Hello, {{ $user.Name }}!</h1>
 
         @if ($user.IsAdmin)
