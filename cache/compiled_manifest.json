@@ -1,5 +1,0 @@
-{
-  "pages/about.blade.tpl": "pages_about.blade.tpl.compiled",
-  "pages/contact.blade.tpl": "pages_contact.blade.tpl.compiled",
-  "pages/home.blade.tpl": "pages_home.blade.tpl.compiled"
-}

@@ -2,7 +2,7 @@
 @if($isSticky) sticky @endif 
 @if($headerClass) {{ $headerClass }} @else bg-light @endif">
   <div class="container">
-    <a class="navbar-brand" href="/">MySite</a>
+    <a class="navbar-brand" href="/">MySite 123</a>
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
       <span class="navbar-toggler-icon"></span>
     </button>
