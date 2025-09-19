@@ -14,7 +14,7 @@ import (
 	"sync"
 )
 
-// BladeEngine với cache system
+// BladeEngine with caching system
 type BladeEngine struct {
 	templatesDir       string
 	templateExtension  string
@@ -32,7 +32,7 @@ type BladeEngine struct {
 	fs               fsys.FS // optional embedded FS for go mode
 }
 
-// BladeConfig cấu hình cho Blade Engine
+// BladeConfig configuration for Blade Engine
 type BladeConfig struct {
 	TemplatesDir      string
 	TemplateExtension string
@@ -54,7 +54,7 @@ type BladeConfig struct {
 	DiskCacheOnly bool
 }
 
-// NewBladeEngineWithConfig tạo Blade Engine với cấu hình
+// NewBladeEngineWithConfig creates a new Blade Engine with the given configuration
 func NewBladeEngineWithConfig(config BladeConfig) *BladeEngine {
 	var cacheManager *CacheManager
 
@@ -95,10 +95,10 @@ func NewBladeEngineWithConfig(config BladeConfig) *BladeEngine {
 		mode:               m,
 		fs:                 config.EmbeddedFS,
 	}
-	// Validate all templates trước khi start
+	// Validate all templates before starting
 	if err := be.ValidateAllTemplates(); err != nil {
 		log.Printf("Template validation errors: %v", err)
-		// Có thể continue hoặc exit tùy requirement
+		// Can continue or exit depending on requirements
 	}
 
 	// Preload với error logging
@@ -106,7 +106,7 @@ func NewBladeEngineWithConfig(config BladeConfig) *BladeEngine {
 		log.Printf("Preload warnings: %v", err)
 	}
 
-	// Trong development mode, start file watcher
+	// In development mode, start file watcher
 	if config.Development {
 		watcher, err := NewFileWatcher(be, config.TemplatesDir)
 		if err != nil {
@@ -174,20 +174,22 @@ func (b *BladeEngine) Render(w io.Writer, templateName string, data interface{})
 	return b.renderWithoutCache(w, templateName, data)
 }
 
-// renderWithCache render template sử dụng cache
+// renderWithCache render template using cache
+// Note: we do not write compiled files here anymore.
+// Compiled file cache management is handled by the Compiler.
 func (b *BladeEngine) renderWithCache(w io.Writer, templateName string, data interface{}) error {
-	// Kiểm tra cache
+	// Check cache
 	if tmpl, found := b.cacheManager.Get(templateName); found {
 		return tmpl.Execute(w, data)
 	}
 
-	// Template không có trong cache, compile và cache
+	// Template not found in cache, compile and cache
 	tmpl, size, err := b.compileAndCacheTemplate(templateName)
 	if err != nil {
 		return err
 	}
 
-	// Thêm vào cache
+	// Add to cache
 	if err := b.cacheManager.Set(templateName, tmpl, size); err != nil {
 		fmt.Printf("Warning: Could not cache template %s: %v\n", templateName, err)
 	}
@@ -195,7 +197,7 @@ func (b *BladeEngine) renderWithCache(w io.Writer, templateName string, data int
 	return tmpl.Execute(w, data)
 }
 
-// renderWithoutCache render template không sử dụng cache
+// renderWithoutCache render template without using cache
 func (b *BladeEngine) renderWithoutCache(w io.Writer, templateName string, data interface{}) error {
 	templatePath := filepath.Join(b.templatesDir, templateName)
 	fmt.Println("templatePath", templatePath)
@@ -208,11 +210,11 @@ func (b *BladeEngine) renderWithoutCache(w io.Writer, templateName string, data 
 	return tmpl.Execute(w, data)
 }
 
-// compileAndCacheTemplate compile template và tính toán kích thước
+// compileAndCacheTemplate compile template and estimate size
 func (b *BladeEngine) compileAndCacheTemplate(templateName string) (*template.Template, int, error) {
 	templatePath := filepath.Join(b.templatesDir, templateName)
 
-	// Kiểm tra template tồn tại (disk); when using embedded FS in go mode, skip disk check
+	// Check if template exists (disk); when using embedded FS in go mode, skip disk check
 	if !(b.mode == "go" && b.fs != nil) {
 		if _, err := os.Stat(templatePath); os.IsNotExist(err) {
 			return nil, 0, fmt.Errorf("template not found: %s", templateName)
@@ -228,10 +230,10 @@ func (b *BladeEngine) compileAndCacheTemplate(templateName string) (*template.Te
 		return nil, 0, fmt.Errorf("error compiling template %s: %w", templateName, err)
 	}
 
-	// Ước tính kích thước template
+	// Estimate template size
 	size, err := b.estimateTemplateSize(templatePath, tmpl)
 	if err != nil {
-		// Fallback: sử dụng file size
+		// Fallback: use file size
 		if !(b.mode == "go" && b.fs != nil) {
 			if fileInfo, err := os.Stat(templatePath); err == nil {
 				size = int(fileInfo.Size())
@@ -246,21 +248,21 @@ func (b *BladeEngine) compileAndCacheTemplate(templateName string) (*template.Te
 	return tmpl, size, nil
 }
 
-// RenderString render template thành string
+// RenderString render template to string
 func (b *BladeEngine) RenderString(templateName string, data interface{}) (string, error) {
 	var buf bytes.Buffer
 	err := b.Render(&buf, templateName, data)
 	return buf.String(), err
 }
 
-// ClearCache xóa toàn bộ cache
+// ClearCache clear all cache
 func (b *BladeEngine) ClearCache() {
 	if b.cacheManager != nil {
 		b.cacheManager.Clear()
 	}
 }
 
-// CacheStats trả về thống kê cache
+// CacheStats returns cache statistics
 func (b *BladeEngine) CacheStats() map[string]interface{} {
 	if b.cacheManager != nil {
 		return b.cacheManager.Stats()
@@ -270,7 +272,7 @@ func (b *BladeEngine) CacheStats() map[string]interface{} {
 	}
 }
 
-// PreloadTemplates preload các templates vào cache với error handling tốt hơn
+// PreloadTemplates preload templates into cache with better error handling
 func (b *BladeEngine) PreloadTemplates() error {
 	if !b.enableCache || b.cacheManager == nil {
 		return nil
@@ -308,7 +310,7 @@ func (b *BladeEngine) PreloadTemplates() error {
 			return nil
 		})
 	} else {
-		// Duyệt qua tất cả các file trong templatesDir trên disk
+		// Walk through all files in templatesDir on disk
 		err = filepath.Walk(b.templatesDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				errors = append(errors, fmt.Sprintf("error accessing %s: %v", path, err))
@@ -324,7 +326,7 @@ func (b *BladeEngine) PreloadTemplates() error {
 					return nil
 				}
 
-				// Preload template vào cache
+				// Preload template into cache
 				tmpl, size, err := b.compileAndCacheTemplate(relPath)
 				if err != nil {
 					errors = append(errors, fmt.Sprintf("error compiling %s: %v", relPath, err))
@@ -351,7 +353,7 @@ func (b *BladeEngine) PreloadTemplates() error {
 	return nil
 }
 
-// EnableCache bật/tắt cache
+// EnableCache enables or disables the in-memory cache
 func (b *BladeEngine) EnableCache(enabled bool) {
 	b.enableCache = enabled
 }
@@ -389,7 +391,7 @@ func (b *BladeEngine) GetCachedTemplates() []string {
 	return []string{}
 }
 
-// WarmupCache làm nóng cache bằng cách preload các templates thường dùng
+// WarmupCache warms up the cache by preloading commonly used templates
 func (b *BladeEngine) WarmupCache(templateNames []string) {
 	if !b.enableCache || b.cacheManager == nil {
 		return
@@ -405,11 +407,11 @@ func (b *BladeEngine) WarmupCache(templateNames []string) {
 	}
 }
 
-// estimateTemplateSize ước tính kích thước template
+// estimateTemplateSize estimates the size of a template
 func (b *BladeEngine) estimateTemplateSize(templatePath string, tmpl *template.Template) (int, error) {
 	var buf bytes.Buffer
 
-	// Thử execute template với dữ liệu rỗng
+	// Try executing template with empty data
 	err := tmpl.Execute(&buf, map[string]interface{}{})
 	if err != nil {
 		// If execution fails, return the file size

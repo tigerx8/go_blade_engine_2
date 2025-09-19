@@ -10,7 +10,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-// FileWatcher theo dõi thay đổi template files
+// FileWatcher watches template files and clears cache on changes
 type FileWatcher struct {
 	watcher    *fsnotify.Watcher
 	blade      *BladeEngine
@@ -18,7 +18,7 @@ type FileWatcher struct {
 	extensions []string
 }
 
-// NewFileWatcher tạo file watcher mới
+// NewFileWatcher creates a new file watcher
 func NewFileWatcher(blade *BladeEngine, watchDir string) (*FileWatcher, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -54,7 +54,7 @@ func NewFileWatcher(blade *BladeEngine, watchDir string) (*FileWatcher, error) {
 	return fw, nil
 }
 
-// addWatchRecursive thêm đệ quy các thư mục để watch
+// addWatchRecursive adds directories to watch recursively
 func (fw *FileWatcher) addWatchRecursive(dir string) error {
 	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -69,7 +69,7 @@ func (fw *FileWatcher) addWatchRecursive(dir string) error {
 	})
 }
 
-// Start bắt đầu watching
+// Start starts watching
 func (fw *FileWatcher) Start() {
 	go func() {
 		for {
@@ -82,7 +82,7 @@ func (fw *FileWatcher) Start() {
 				if fw.isTemplateFile(event.Name) && (event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Remove == fsnotify.Remove) {
 					fmt.Printf("Template changed: %s, clearing cache...\n", event.Name)
 
-					// Xóa template khỏi cache (memory + compiled file)
+					// Remove template from cache (memory + compiled file)
 					relPath, err := filepath.Rel(fw.watchDir, event.Name)
 					if err == nil {
 						fw.blade.ClearCacheFor(relPath)
@@ -105,7 +105,7 @@ func (fw *FileWatcher) Start() {
 	}()
 }
 
-// isTemplateFile kiểm tra nếu file là template file
+// isTemplateFile checks if a file is a template file
 func (fw *FileWatcher) isTemplateFile(filename string) bool {
 	ext := filepath.Ext(filename)
 	for _, allowedExt := range fw.extensions {
@@ -116,12 +116,12 @@ func (fw *FileWatcher) isTemplateFile(filename string) bool {
 	return false
 }
 
-// Stop dừng watching
+// Stop watching
 func (fw *FileWatcher) Stop() {
 	fw.watcher.Close()
 }
 
-// ClearCacheFor xóa template cụ thể khỏi cache
+// ClearCacheFor removes a specific template from the cache
 func (b *BladeEngine) ClearCacheFor(templateName string) {
 	if b.cacheManager != nil {
 		b.cacheManager.Remove(templateName)

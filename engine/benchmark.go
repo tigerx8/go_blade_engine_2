@@ -28,11 +28,11 @@ func BenchmarkBladeEngine(b *testing.B) {
 	}
 }
 
-// TestCachePerformance test hiệu năng cache
+// TestCachePerformance tests performance with and without cache
 func TestCachePerformance() {
 	blade := NewBladeEngine("./templates")
 
-	// Test không cache
+	// Test without cache
 	blade.EnableCache(false)
 	start := time.Now()
 	for i := 0; i < 1000; i++ {
@@ -40,7 +40,7 @@ func TestCachePerformance() {
 	}
 	withoutCache := time.Since(start)
 
-	// Test với cache
+	// Test with cache
 	blade.EnableCache(true)
 	blade.ClearCache()
 	// Preload first time

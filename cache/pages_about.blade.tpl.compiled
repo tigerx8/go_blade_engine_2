@@ -1,4 +1,4 @@
-{{define "title"}}{{ .title }}{{end}}{{define "inner"}}{{end}}{{define "content"}}<section class="py-5">
+{{define "inner"}}{{end}}{{define "content"}}<section class="py-5">
     <div class="container">
         <h1>About Us</h1>
         <p>This is the about page of our website. Here you can find more information about us.</p>
@@ -7,7 +7,7 @@
         <p>Feel free to reach out to us through the contact page for any inquiries.</p>
 
     </div>
-</section>{{end}}<!DOCTYPE html>
+</section>{{end}}{{define "title"}}{{ .title }}{{end}}<!DOCTYPE html>
 <html lang="en">
 
 <head>

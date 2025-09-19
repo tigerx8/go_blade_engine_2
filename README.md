@@ -56,7 +56,7 @@ Blade Engine supports Fiber through the FiberViewsAdapter. You just need to pass
         Views: adapter,
     })
 
-## 4. Render template trong Fiber handler
+## 4. Render template in Fiber handler
 
     app.Get("/", func(c *fiber.Ctx) error {
         data := map[string]interface{}{

@@ -42,22 +42,22 @@ func main() {
 		subFS = f
 	}
 
-	// Cấu hình với cache
+	// Configure with cache
 	config := engine.BladeConfig{
 		TemplatesDir:      "./templates",
 		CacheEnabled:      true,
-		Development:       false,   // Set true để development mode (auto reload)
+		Development:       false,   // Set true for development mode (auto reload)
 		CacheMaxSizeMB:    50,      // 50MB cache
 		CacheTTLMinutes:   30,      // 30 minutes
-		TemplateExtension: ".tpl",  // dùng ".tpl" nếu là Blade
-		Mode:              "blade", // "blade" hoặc "go". Set to "go" to use EmbeddedFS with native Go templates.
+		TemplateExtension: ".tpl",  // Use ".tpl" if using Blade
+		Mode:              "blade", // "blade" or "go". Set to "go" to use EmbeddedFS with native Go templates.
 		EmbeddedFS:        subFS,   // Provided for go mode; ignored in blade mode
 	}
 
 	blade := engine.NewBladeEngineWithConfig(config)
 	adapter := engine.FiberViewsAdapter{Engine: blade}
 
-	// Thiết lập Fiber với adapter
+	// Configure Fiber with adapter
 	app := fiber.New(fiber.Config{
 		Views: &adapter,
 	})
@@ -111,7 +111,7 @@ func main() {
 		return c.Render("pages/home.gohtml", engine.WithFiberContext(c, data))
 	})
 
-	// Endpoint để xem cache stats
+	// Endpoint to view cache stats
 	app.Get("/cache-stats", func(c *fiber.Ctx) error {
 		stats := blade.CacheStats()
 		var b strings.Builder
@@ -122,7 +122,7 @@ func main() {
 		return c.Type("text").SendString(b.String())
 	})
 
-	// Endpoint để clear cache
+	// Endpoint to clear cache
 	app.Get("/clear-cache", func(c *fiber.Ctx) error {
 		blade.ClearCache()
 		return c.Type("text").SendString("Cache cleared successfully")

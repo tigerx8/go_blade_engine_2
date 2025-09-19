@@ -11,27 +11,27 @@ import (
 	"time"
 )
 
-// CacheItem đại diện cho một item trong cache
+// CacheItem represents a cached template
 type CacheItem struct {
 	Template   *template.Template
 	CreatedAt  time.Time
 	LastUsedAt time.Time
-	Size       int // Kích thước ước tính của template
+	Size       int // Estimated size of the template
 }
 
-// CacheManager quản lý cache template
+// CacheManager manages cached templates
 type CacheManager struct {
 	items           map[string]*CacheItem
-	mutex           sync.RWMutex  // Bảo vệ truy cập đồng thời
-	maxSize         int           // Kích thước cache tối đa (bytes)
-	currentSize     int           // Kích thước cache hiện tại
-	ttl             time.Duration // Time-to-live cho cache items
-	cleanupInterval time.Duration // Khoảng thời gian dọn dẹp
-	stopCleanup     chan bool     // Kênh để dừng routine dọn dẹp
-	cacheDir        string        // Thư mục lưu file cache
+	mutex           sync.RWMutex  // Protects concurrent access
+	maxSize         int           // Maximum cache size (bytes)
+	currentSize     int           // Current cache size (bytes)
+	ttl             time.Duration // Time-to-live for cache items
+	cleanupInterval time.Duration // Cleanup interval
+	stopCleanup     chan bool     // Channel to stop cleanup routine
+	cacheDir        string        // Directory to store cache files
 }
 
-// NewCacheManager tạo cache manager mới
+// NewCacheManager creates a new CacheManager
 func NewCacheManager(maxSizeMB int, ttlMinutes, cleanupMinutes int) *CacheManager {
 	maxSize := maxSizeMB * 1024 * 1024 // Convert MB to bytes
 	// Allow overriding cache directory via env var; otherwise use OS temp dir to avoid creating project-level ./cache
@@ -56,7 +56,7 @@ func NewCacheManager(maxSizeMB int, ttlMinutes, cleanupMinutes int) *CacheManage
 	}
 	log.Println("Using cache directory: " + cacheDir)
 
-	// Bắt đầu routine dọn dẹp cache định kỳ
+	// Start cleanup routine
 	go cm.startCleanupRoutine()
 
 	return cm
@@ -75,17 +75,17 @@ func (cm *CacheManager) Get(key string) (*template.Template, bool) {
 	return nil, false
 }
 
-// Set thêm template vào cache
+// Set value or update cached template
 func (cm *CacheManager) Set(key string, tmpl *template.Template, size int) error {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
 
-	// Kiểm tra nếu cache đã đầy
+	// Check if cache is full
 	if cm.currentSize+size > cm.maxSize {
 		cm.evictOldItems()
 	}
 
-	// Nếu vẫn còn đầy sau khi evict, return error
+	// If still full after evicting, return error
 	if cm.currentSize+size > cm.maxSize {
 		return fmt.Errorf("cache is full, cannot add item")
 	}
@@ -157,7 +157,7 @@ func (cm *CacheManager) CleanupLegacyCompiledForDirs(dirs []string) error {
 	return nil
 }
 
-// Remove xóa template khỏi cache
+// Remove removes a template from cache
 func (cm *CacheManager) Remove(key string) {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
@@ -171,14 +171,14 @@ func (cm *CacheManager) Remove(key string) {
 	}
 }
 
-// Clear xóa toàn bộ cache
+// Clear removes all items from cache
 func (cm *CacheManager) Clear() {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
 
 	cm.items = make(map[string]*CacheItem)
 	cm.currentSize = 0
-	// Xóa toàn bộ file cache
+	// Remove all cache files
 	entries, _ := os.ReadDir(cm.cacheDir)
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -187,7 +187,7 @@ func (cm *CacheManager) Clear() {
 	}
 }
 
-// GetFileCache đọc nội dung file cache compiled
+// GetFileCache reads the content of the compiled cache file
 func (cm *CacheManager) GetFileCache(key string) (string, bool) {
 	cacheFile := filepath.Join(cm.cacheDir, strings.ReplaceAll(key, string(os.PathSeparator), "_")+".compiled")
 	data, err := os.ReadFile(cacheFile)
@@ -197,32 +197,32 @@ func (cm *CacheManager) GetFileCache(key string) (string, bool) {
 	return string(data), true
 }
 
-// evictOldItems xóa các item cũ để giải phóng bộ nhớ
+// evictOldItems removes old items to free up memory
 func (cm *CacheManager) evictOldItems() {
-	// Ưu tiên xóa items ít được sử dụng nhất và cũ nhất
+	// Prioritize removing least recently used and oldest items
 	var keysToRemove []string
 
 	for key, item := range cm.items {
-		// Kiểm tra TTL
+		// Check TTL
 		if time.Since(item.CreatedAt) > cm.ttl {
 			keysToRemove = append(keysToRemove, key)
 			continue
 		}
 
-		// Kiểm tra nếu không được sử dụng trong 2 lần TTL
+		// Check if not used in 2 TTLs
 		if time.Since(item.LastUsedAt) > cm.ttl*2 {
 			keysToRemove = append(keysToRemove, key)
 		}
 	}
 
-	// Xóa các items đã chọn
+	// Remove selected items
 	for _, key := range keysToRemove {
 		cm.currentSize -= cm.items[key].Size
 		delete(cm.items, key)
 	}
 }
 
-// startCleanupRoutine chạy routine dọn dẹp cache định kỳ
+// startCleanupRoutine runs the periodic cache cleanup routine
 func (cm *CacheManager) startCleanupRoutine() {
 	ticker := time.NewTicker(cm.cleanupInterval)
 	defer ticker.Stop()
@@ -237,7 +237,7 @@ func (cm *CacheManager) startCleanupRoutine() {
 	}
 }
 
-// cleanupExpiredItems dọn dẹp các items đã hết hạn
+// cleanupExpiredItems removes expired items
 func (cm *CacheManager) cleanupExpiredItems() {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
@@ -251,12 +251,12 @@ func (cm *CacheManager) cleanupExpiredItems() {
 	}
 }
 
-// Stop dừng cleanup routine
+// Stop stops the cleanup routine
 func (cm *CacheManager) Stop() {
 	close(cm.stopCleanup)
 }
 
-// Stats trả về thống kê cache
+// Stats returns cache statistics
 func (cm *CacheManager) Stats() map[string]interface{} {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
@@ -269,7 +269,7 @@ func (cm *CacheManager) Stats() map[string]interface{} {
 	}
 }
 
-// GetKeys trả về danh sách keys trong cache
+// GetKeys returns a list of keys in the cache
 func (cm *CacheManager) GetKeys() []string {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()

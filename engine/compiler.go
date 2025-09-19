@@ -242,7 +242,7 @@ func (c *Compiler) SetSkipCompiledExtensions(exts []string) {
 	c.skipCompiledExtensions = cleaned
 }
 
-// processExtends xử lý directive @extends
+// processExtends processes the @extends directive
 func (c *Compiler) processExtends(content string) (string, string, error) {
 	re := regexp.MustCompile(`@extends\s*\(\s*'([^']+)'\s*\)`)
 	matches := re.FindStringSubmatch(content)
@@ -298,7 +298,7 @@ func (c *Compiler) CompileString(content, templatePath string) (string, error) {
 	return content, nil
 }
 
-// processAllDirectives xử lý tất cả các directive Blade
+// processAllDirectives processes all Blade directives
 func (c *Compiler) processAllDirectives(content, templatePath string) (string, error) {
 	directives := []func(string, string) (string, error){
 		c.processSections,
@@ -327,13 +327,13 @@ func (c *Compiler) processAllDirectives(content, templatePath string) (string, e
 	return content, nil
 }
 
-// processSections xử lý @section và @endsection
+// processSections processes @section and @endsection directives
 func (c *Compiler) processSections(content, templatePath string) (string, error) {
-	// Xử lý @section('name') ... @endsection trên nhiều dòng (dùng (?s) cho dotall)
+	// Handle @section('name') ... @endsection across multiple lines (use (?s) for dotall)
 	re := regexp.MustCompile(`(?s)@section\s*\(\s*['"]([^'"]+)['"]\s*\)\s*(.*?)\s*@endsection`)
 	content = re.ReplaceAllString(content, "{{define \"$1\"}}$2{{end}}")
 
-	// Xử lý @section('name') trên single line
+	// Handle @section('name') on single line
 	re = regexp.MustCompile(`@section\s*\(\s*['"]([^'"]+)['"]\s*\)\s*`)
 	content = re.ReplaceAllString(content, "{{define \"$1\"}}")
 
@@ -345,7 +345,7 @@ func (c *Compiler) processSections(content, templatePath string) (string, error)
 	return content, nil
 }
 
-// processYield xử lý @yield
+// processYield processes @yield
 func (c *Compiler) processYield(content, templatePath string) (string, error) {
 	re := regexp.MustCompile(`@yield(?:\s*\(\s*)?(?:'([^']+)'|"([^"]+)"|([a-zA-Z0-9_\-/\.]+))(?:\s*\))?`)
 	content = re.ReplaceAllStringFunc(content, func(match string) string {
@@ -414,7 +414,7 @@ func (c *Compiler) processIfStatements(content, templatePath string) (string, er
 		return "{{if " + cond + "}}" + sub[2] + "{{else}}" + sub[3] + "{{end}}"
 	})
 
-	// 2) Xử lý khối @if ... @endif không có else
+	// 2) Handle @if ... @endif blocks without else
 	ifRe := regexp.MustCompile(`(?s)@if\s*\((.*?)\)\s*(.*?)\s*@endif`)
 	content = ifRe.ReplaceAllStringFunc(content, func(m string) string {
 		sub := ifRe.FindStringSubmatch(m)
@@ -435,7 +435,7 @@ func (c *Compiler) processIfStatements(content, templatePath string) (string, er
 		return "{{else if " + sanitize(sub[1]) + "}}"
 	})
 
-	// 4) Xử lý @else trên nhiều dòng
+	// 4) Handle @else across multiple lines
 	elseRe := regexp.MustCompile(`(?m)^\s*@else\s*$`)
 	content = elseRe.ReplaceAllString(content, "{{else}}")
 
@@ -457,11 +457,11 @@ func (c *Compiler) processIfStatements(content, templatePath string) (string, er
 }
 
 func (c *Compiler) processElse(content, templatePath string) (string, error) {
-	// Xử lý @elseif trên nhiều dòng và có thể có thụt lề
+	// Handle @elseif across multiple lines and with possible indentation
 	elseifRe := regexp.MustCompile(`(?m)^\s*@elseif\s*\((.*?)\)`)
 	content = elseifRe.ReplaceAllString(content, "{{else if $1}}")
 
-	// Xử lý @else trên nhiều dòng và có thể có thụt lề
+	// Handle @else across multiple lines and with possible indentation
 	elseRe := regexp.MustCompile(`(?m)^\s*@else\s*`)
 	content = elseRe.ReplaceAllString(content, "{{else}}")
 
@@ -478,7 +478,7 @@ func (c *Compiler) processForeach(content, templatePath string) (string, error) 
 	normalize := func(coll, item string) (string, string) {
 		coll = strings.TrimSpace(coll)
 		item = strings.TrimSpace(item)
-		// Chuẩn hoá collection: luôn dùng dot context
+		// Normalize collection: always use dot context
 		if strings.HasPrefix(coll, "$") {
 			coll = "." + strings.TrimPrefix(coll, "$")
 		} else if !strings.HasPrefix(coll, ".") {
@@ -493,7 +493,7 @@ func (c *Compiler) processForeach(content, templatePath string) (string, error) 
 		return coll, item
 	}
 
-	// Xử lý block @foreach ... @endforeach trên nhiều dòng, kể cả thụt lề
+	// Handle @foreach ... @endforeach blocks across multiple lines, including indentation
 	reBlock := regexp.MustCompile(`(?s)@foreach\s*\((.*?)\s+as\s+(.*?)\)\s*(.*?)\n[ \t]*@endforeach`)
 	content = reBlock.ReplaceAllStringFunc(content, func(m string) string {
 		sub := reBlock.FindStringSubmatch(m)
@@ -502,7 +502,10 @@ func (c *Compiler) processForeach(content, templatePath string) (string, error) 
 		}
 		coll, item := normalize(sub[1], sub[2])
 		body := sub[3]
-		// Chuyển tham chiếu $item.xxx -> .xxx trong body
+		// Rewrite body to replace $item. with . (dot)
+		// If users want to use $item alone, they can use {{$item}} which will be escaped.
+		// If they want raw output, they can use {!!$item!!}.
+		// So we only need to handle the dot access case here.
 		itemName := strings.TrimPrefix(item, "$")
 		reVar := regexp.MustCompile(`{{\s*\$` + regexp.QuoteMeta(itemName) + `\.`)
 		body = reVar.ReplaceAllString(body, "{{ .")
@@ -512,7 +515,7 @@ func (c *Compiler) processForeach(content, templatePath string) (string, error) 
 		return "{{range " + coll + "}}" + body + "{{end}}"
 	})
 
-	// Xử lý @foreach trên single line (mở block)
+	// Handle @foreach on single line (open block)
 	reOpen := regexp.MustCompile(`@foreach\s*\((.*?)\s+as\s+(.*?)\)`)
 	content = reOpen.ReplaceAllStringFunc(content, func(m string) string {
 		sub := reOpen.FindStringSubmatch(m)
@@ -523,7 +526,7 @@ func (c *Compiler) processForeach(content, templatePath string) (string, error) 
 		return "{{range " + coll + "}}"
 	})
 
-	// Xử lý @endforeach còn sót lại (có thể có thụt lề)
+	// Handle any leftover @endforeach (start of line, may have indentation)
 	reEnd := regexp.MustCompile(`(?m)^[ \t]*@endforeach[ \t]*$`)
 	content = reEnd.ReplaceAllString(content, "{{end}}")
 
@@ -535,67 +538,20 @@ func (c *Compiler) processEndForeach(content, templatePath string) (string, erro
 	return content, nil
 }
 
-// processUnless xử lý @unless
+// processUnless processes @unless
 func (c *Compiler) processUnless(content, templatePath string) (string, error) {
-	// Xử lý block @unless ... @endunless trên nhiều dòng
+	// Handle @unless ... @endunless blocks across multiple lines
 	re := regexp.MustCompile(`(?s)@unless\s*\((.*?)\)\s*(.*?)\s*@endunless`)
 	content = re.ReplaceAllString(content, "{{if not $1}}$2{{end}}")
 
-	// Xử lý @unless trên single line
+	// Handle @unless on single line
 	re = regexp.MustCompile(`@unless\s*\((.*?)\)`)
 	content = re.ReplaceAllString(content, "{{if not $1}}")
 	content = strings.ReplaceAll(content, "@endunless", "{{end}}")
 	return content, nil
 }
 
-// processVariables xử lý {{ }}
-func (c *Compiler) processVariables1(content, templatePath string) (string, error) {
-	// Use the expr parser/AST to robustly convert $-variables and normalize expressions.
-	re := regexp.MustCompile(`{{-?\s*(.*?)\s*-?}}`)
-
-	content = re.ReplaceAllStringFunc(content, func(match string) string {
-		sub := re.FindStringSubmatch(match)
-		if len(sub) < 2 {
-			return match
-		}
-		inner := strings.TrimSpace(sub[1])
-
-		// If expression starts with native Go template keyword, keep as-is
-		if toks := regexp.MustCompile(`^\s*([a-zA-Z_][a-zA-Z0-9_]*)`).FindStringSubmatch(inner); len(toks) > 1 {
-			kw := toks[1]
-			switch kw {
-			case "if", "range", "else", "end", "define", "template", "with", "block":
-				return match
-			}
-		}
-
-		// Try to parse with our expression parser
-		p := expr.NewParser(inner)
-		ast, err := p.Parse()
-		if err != nil {
-			// fallback: simple $var -> .var normalization
-			innerNorm := regexp.MustCompile(`\$(\w+)`).ReplaceAllString(inner, ".$1")
-			return strings.Replace(match, sub[1], innerNorm, 1)
-		}
-
-		// Convert AST back to template expression
-		s, err := expr.ToTemplate(ast)
-		if err != nil {
-			innerNorm := regexp.MustCompile(`\$(\w+)`).ReplaceAllString(inner, ".$1")
-			return strings.Replace(match, sub[1], innerNorm, 1)
-		}
-
-		// If it's a simple dollar variable, wrap with escape
-		if expr.IsSimpleDollarVariable(ast) {
-			return "{{escape " + s + "}}"
-		}
-
-		// otherwise preserve the original delimiters/spacing
-		return strings.Replace(match, sub[1], s, 1)
-	})
-
-	return content, nil
-}
+// processVariables processes {{ }}
 func (c *Compiler) processVariables(content string, templatePath string) (string, error) {
 	// match {{ ... }} blocks (non-greedy)
 	re := regexp.MustCompile(`{{\s*(.*?)\s*}}`)
@@ -664,7 +620,7 @@ func tryASTToTemplate(e expr.Expr) (string, bool) {
 // helper char checks
 // NOTE: previous tokenizer helpers removed after migrating to expr parser.
 
-// processRawVariables xử lý {!! !!}
+// processRawVariables processes {!! !!}
 func (c *Compiler) processRawVariables(content, templatePath string) (string, error) {
 	re := regexp.MustCompile(`{!!\s*(.*?)\s*!!}`)
 	content = re.ReplaceAllStringFunc(content, func(m string) string {
@@ -678,25 +634,25 @@ func (c *Compiler) processRawVariables(content, templatePath string) (string, er
 	return content, nil
 }
 
-// processComments xử lý {{-- --}}
+// processComments processes {{-- --}}
 func (c *Compiler) processComments(content, templatePath string) (string, error) {
 	re := regexp.MustCompile(`{{--(.*?)--}}`)
 	content = re.ReplaceAllString(content, "")
 	return content, nil
 }
 
-// processPhp xử lý @php @endphp
+// processPhp processes @php @endphp
 func (c *Compiler) processPhp(content, templatePath string) (string, error) {
 	re := regexp.MustCompile(`@php(.*?)@endphp`)
 	content = re.ReplaceAllString(content, "")
 	return content, nil
 }
 
-// combineWithLayout kết hợp content với layout
+// combineWithLayout combines content with layout
 func (c *Compiler) combineWithLayout(content, layoutName string) (string, error) {
 	layoutPath := filepath.Join(c.templatesDir, layoutName)
 
-	// Kiểm tra layout tồn tại
+	// Check if layout exists
 	if _, err := os.Stat(layoutPath); os.IsNotExist(err) {
 		return "", fmt.Errorf("layout not found: %s", layoutName)
 	}
@@ -865,9 +821,9 @@ func (c *Compiler) combineWithLayout(content, layoutName string) (string, error)
 	return compiledLayout, nil
 }
 
-// validateTemplateSyntax validate cú pháp template
+// validateTemplateSyntax validates the syntax of the compiled template
 func (c *Compiler) validateTemplateSyntax(content string) error {
-	// Tạo template test để validate syntax
+	// Create a test template to validate syntax
 	testTmpl := template.New("validation").Funcs(c.funcMap)
 	_, err := testTmpl.Parse(content)
 	if err != nil {
@@ -894,7 +850,7 @@ func (c *Compiler) validateTemplateSyntax(content string) error {
 	return nil
 }
 
-// ParseTemplate phân tích cú pháp template và trả về Go template
+// ParseTemplate parses and returns a compiled template ready for execution
 func (c *Compiler) ParseTemplate(templatePath string) (*template.Template, error) {
 	// In go mode with embedded FS, parse the full template set using ParseFS so cross-file templates are available
 	if c.mode == "go" && c.fs != nil {
@@ -921,7 +877,7 @@ func (c *Compiler) ParseTemplate(templatePath string) (*template.Template, error
 	return tmpl.Parse(compiledContent)
 }
 
-// DebugCompile hiển thị quá trình biên dịch từng bước
+// DebugCompile prints the compilation steps for a given template
 func (c *Compiler) DebugCompile(templatePath string) error {
 	content, err := os.ReadFile(templatePath)
 	if err != nil {
